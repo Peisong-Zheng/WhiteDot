@@ -1,10 +1,11 @@
 import io
 import json
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from whitedot.provider import MAX_TEXT, PRESETS, Provider, ProviderConfig, ProviderError
 from whitedot.settings import Settings, StorageError
@@ -32,6 +33,25 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(req.get_header("Authorization"), "Bearer " + TOKEN)
+        self.assertIn("explanation in plain English", payload["messages"][0]["content"])
+
+    def test_deletion_suggestion_for_repeated_word(self):
+        draft = "We can can leave."
+        self.opener.open.return_value = response(
+            '{"issues":[{"original":"can ","occurrence":2,"suggestions":[""]}]}'
+        )
+        issue, = self.api.check(draft)
+        self.assertEqual(issue.suggestions, ("",))
+        self.assertEqual(draft[:issue.start] + issue.suggestions[0] + draft[issue.end:], "We can leave.")
+
+    def test_connection_problems_have_actionable_messages(self):
+        for failure, hint in ((TimeoutError(), "timed out"), (URLError(TimeoutError()), "timed out"),
+                              (URLError(ssl.SSLCertVerificationError()), "certificate"),
+                              (URLError("unreachable"), "connection")):
+            with self.subTest(failure=failure):
+                self.opener.open.side_effect = failure
+                with self.assertRaisesRegex(ProviderError, hint):
+                    self.api.validate()
 
     def test_deepseek_blank_json_retried_only_once(self):
         self.opener.open.side_effect = [response("  "), response('{"issues":[]}')]
@@ -49,7 +69,7 @@ class ProviderTests(unittest.TestCase):
             {"original": "not there", "suggestions": ["missing"], "occurrence": 1},
             {"original": "go", "suggestions": ["goes"], "occurrence": 1},
             {"original": "go", "suggestions": ["goes"]},  # ambiguous
-            {"original": "Tehh", "suggestions": ["The", "The"], "explanation": "拼写"},
+            {"original": "Tehh", "suggestions": ["The", "The"], "explanation": "Spelling."},
             {"original": "Tehh day", "suggestions": ["The day"]},
         ]}))
         issues = self.api.check(text)
@@ -64,10 +84,20 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(self.api.check("I lead. He lead.")[0].start, 11)
 
+    def test_occurrence_ignores_matches_inside_other_words_or_identifiers(self):
+        draft = "This is sample_is. The results is clear."
+        self.opener.open.return_value = response(
+            '{"issues":[{"original":"is","occurrence":2,"suggestions":["are"]}]}'
+        )
+        issue, = self.api.check(draft)
+        self.assertEqual(issue.start, draft.rindex("is"))
+        self.assertEqual(draft[:issue.start] + "are" + draft[issue.end:],
+                         "This is sample_is. The results are clear.")
+
     def test_rewrite_preserves_linebreaks_indentation_and_non_english(self):
         self.opener.open.return_value = response('{"lines":["She goes.","The end."]}')
-        original = "\tShe go.  \r\n\r\n只有中文。\nTeh end.\n"
-        expected = "\tShe goes.  \r\n\r\n只有中文。\nThe end.\n"
+        original = "\tShe go.  \r\n\r\n\N{GREEK CAPITAL LETTER DELTA}\nTeh end.\n"
+        expected = "\tShe goes.  \r\n\r\n\N{GREEK CAPITAL LETTER DELTA}\nThe end.\n"
         self.assertEqual(self.api.rewrite(original), expected)
         req = self.opener.open.call_args.args[0]
         data = json.loads(json.loads(req.data)["messages"][1]["content"])
@@ -79,8 +109,8 @@ class ProviderTests(unittest.TestCase):
             self.api.rewrite("First\nSecond")
 
     def test_skip_non_english_and_limit_before_submission(self):
-        self.assertEqual(self.api.check("今天 🌳"), [])
-        self.assertEqual(self.api.rewrite("今天 🌳"), "今天 🌳")
+        self.assertEqual(self.api.check("\N{GREEK CAPITAL LETTER DELTA} 🌳"), [])
+        self.assertEqual(self.api.rewrite("\N{GREEK CAPITAL LETTER DELTA} 🌳"), "\N{GREEK CAPITAL LETTER DELTA} 🌳")
         with self.assertRaises(ProviderError):
             self.api.check("x" * (MAX_TEXT + 1))
         self.opener.open.assert_not_called()
@@ -137,6 +167,27 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn(TOKEN, self.path.read_text())
         different_endpoint = ProviderConfig("OpenAI", "https://other.example/v1", "model")
         self.assertEqual(restored.get_key(different_endpoint), "")
+
+    def test_switch_providers_recovers_custom_endpoint_model_and_key_after_upgrade(self):
+        custom = ProviderConfig("Custom", "https://model.example/v1", "my-editor")
+        self.settings.save_provider(custom, TOKEN)
+        legacy = json.loads(self.path.read_text())
+        del legacy["profiles"]
+        self.path.write_text(json.dumps(legacy))
+        upgraded = Settings(self.path)
+        upgraded.save_provider(PRESETS["OpenAI"], "second-key")
+        restored = Settings(self.path)
+        self.assertEqual(restored.config, PRESETS["OpenAI"])
+        self.assertEqual(restored.config_for("Custom"), custom)
+        self.assertEqual(restored.get_key(restored.config_for("Custom")), TOKEN)
+        self.assertNotIn(TOKEN, self.path.read_text())
+        self.assertNotIn("second-key", self.path.read_text())
+
+    def test_incomplete_account_index_can_be_repaired_by_validating_a_key(self):
+        self.settings.set("accounts", None)
+        self.assertEqual(self.settings.get_key(), "")
+        self.settings.save_provider(PRESETS["DeepSeek"], TOKEN)
+        self.assertEqual(self.settings.get_key(), TOKEN)
 
     def test_failed_vault_save_preserves_preferences(self):
         self.vault.set_password.side_effect = RuntimeError(TOKEN)

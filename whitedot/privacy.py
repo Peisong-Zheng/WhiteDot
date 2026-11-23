@@ -16,9 +16,9 @@ def contains_credential(text):
 
 def input_status(text, limit):
     if contains_credential(text):
-        return "检测到可能的密钥，本段已跳过。"
+        return "Remove the possible secret to check this draft."
     if len(text) > limit:
-        return f"每次最多检查 {limit:,} 个字符，请分段处理。"
+        return f"Check up to {limit:,} characters at a time."
     if not re.search("[a-zA-Z]", text):
-        return "等待输入英文"
+        return "Enter English text to check."
     return ""

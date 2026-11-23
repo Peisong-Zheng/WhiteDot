@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 LABEL = "io.whitedot.writer"
 PLIST = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
@@ -19,13 +20,18 @@ def launch_command():
 
 def enabled():
     if sys.platform == "darwin":
-        return PLIST.is_file()
+        try:
+            registration = plistlib.loads(PLIST.read_bytes())
+        except (FileNotFoundError, plistlib.InvalidFileException, ExpatError, ValueError):
+            return False
+        return (isinstance(registration, dict) and registration.get("RunAtLoad") is True
+                and registration.get("ProgramArguments") == launch_command())
     if sys.platform == "win32":
         import winreg
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-                winreg.QueryValueEx(key, "WhiteDot")
-                return True
+                command, kind = winreg.QueryValueEx(key, "WhiteDot")
+                return kind == winreg.REG_SZ and command == subprocess.list2cmdline(launch_command())
         except FileNotFoundError:
             return False
     return False
@@ -38,16 +44,25 @@ def set_enabled(on):
             return
         PLIST.parent.mkdir(parents=True, exist_ok=True)
         data = {"Label": LABEL, "ProgramArguments": launch_command(), "RunAtLoad": True}
-        with tempfile.NamedTemporaryFile(dir=PLIST.parent, delete=False) as f:
-            plistlib.dump(data, f)
-        os.replace(f.name, PLIST)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=PLIST.parent, delete=False) as f:
+                tmp = Path(f.name)
+                plistlib.dump(data, f)
+            os.replace(tmp, PLIST)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
     elif sys.platform == "win32":
         import winreg
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
             if on:
                 winreg.SetValueEx(key, "WhiteDot", 0, winreg.REG_SZ,
                                   subprocess.list2cmdline(launch_command()))
-            elif enabled():
-                winreg.DeleteValue(key, "WhiteDot")
+            else:
+                try:
+                    winreg.DeleteValue(key, "WhiteDot")
+                except FileNotFoundError:
+                    pass
     else:
-        raise OSError("不支持当前系统的登录启动。")
+        raise OSError("Launch at login is unavailable on this system.")

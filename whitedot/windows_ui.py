@@ -1,4 +1,5 @@
 """Floating launcher and writing surfaces shared by both desktop platforms."""
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 import re
@@ -7,12 +8,12 @@ import sys
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFontDatabase, QIcon, QKeySequence, QPainter, QPainterPath,
                            QPalette, QPen, QPixmap, QRadialGradient, QShortcut, QTextCharFormat, QTextCursor)
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+from PySide6.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                                QTextEdit, QVBoxLayout, QWidget)
 
 TOP = Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 NO_FOCUS = TOP | Qt.WindowDoesNotAcceptFocus
-WORDS = re.compile(r"[A-Za-z]+(?:[’'-][A-Za-z]+)*")
+WORDS = re.compile(r"[^\W_]+(?:[’'-][^\W_]+)*")
 
 STYLE = """
 QWidget { color:#232a36; font-size:13px; }
@@ -22,13 +23,15 @@ QLabel#wordmark { font-family:Spectral; font-size:26px; color:#263047; }
 QLabel#heading { font-size:18px; font-weight:600; }
 QLabel#sectionLabel { font-size:12px; color:#4c566d; font-weight:600; }
 QLabel#count, QLabel#caption { font-size:12px; color:#5e6878; }
+QPushButton#context { color:#344b84; font-weight:600; text-align:left; padding:3px 7px; }
+QComboBox QAbstractItemView { background:white; color:#232a36; selection-background-color:#d9e3ff; selection-color:#182444; }
 QLabel#word { font-family:Spectral; font-size:20px; color:#222e46; }
 QFrame#rule { background:#e0e3e9; border:none; }
 QFrame#toolbar { background:#f5f6f9; border:1px solid #e2e5eb; border-radius:9px; }
 QTextEdit { border:0; padding:0; background:transparent; color:#242a38;
-  selection-background-color:#d9e3ff; selection-color:#182444; font-family:Spectral; font-size:21px; }
+  placeholder-text-color:#687283; selection-background-color:#d9e3ff; selection-color:#182444; font-family:Spectral; font-size:21px; }
 QLineEdit, QComboBox { background:white; color:#252e40; border:1px solid #c2c9d3;
-  border-radius:6px; min-height:24px; padding:4px 8px; selection-background-color:#d9e3ff; }
+  border-radius:6px; min-height:24px; padding:4px 8px; placeholder-text-color:#687283; selection-background-color:#d9e3ff; }
 QComboBox::drop-down { subcontrol-origin:padding; subcontrol-position:center right; width:24px; border:0; }
 QLineEdit:focus, QComboBox:focus { border-color:#435a99; }
 QPushButton { background:transparent; color:#46516b; border:1px solid transparent;
@@ -182,8 +185,8 @@ class Dot(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(56, 56)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("WhiteDot · 点按打开，拖动移位")
-        self.setAccessibleName("打开或收起英文校对")
+        self.setToolTip("Click to write in WhiteDot. Drag to move.")
+        self.setAccessibleName("Open or hide the WhiteDot editor")
         self.origin = None
         self.dragging = False
         native_float(self)
@@ -219,8 +222,8 @@ class Dot(QWidget):
 
 
 class Paper(QWidget):
-    def __init__(self, flags):
-        super().__init__(None, flags | Qt.NoDropShadowWindowHint)
+    def __init__(self, flags, parent=None):
+        super().__init__(parent, flags | Qt.NoDropShadowWindowHint)
         load_typeface()
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(STYLE)
@@ -310,19 +313,23 @@ class Editor(QTextEdit):
         super().__init__()
         prepare_text(self)
         self.issues = []
-        self.setPlaceholderText("输入或粘贴英文…")
-        self.setAccessibleName("英文原文")
+        self.ranges = []
+        self.setMouseTracking(True)
+        self.setPlaceholderText("Write or paste your text…")
+        self.setAccessibleName("Original draft")
 
     def mark(self, issues):
         self.issues = issues
         value = self.toPlainText()
         selections = []
+        self.ranges = []
         for issue in issues:
             sel = QTextEdit.ExtraSelection()
             cursor = self.textCursor()
             cursor.setPosition(utf16(value[:issue.start]))
             cursor.setPosition(utf16(value[:issue.end]), QTextCursor.KeepAnchor)
             sel.cursor = cursor
+            self.ranges.append((cursor.selectionStart(), cursor.selectionEnd(), issue))
             fmt = QTextCharFormat()
             fmt.setUnderlineColor(QColor("#bd394a"))
             fmt.setUnderlineStyle(QTextCharFormat.WaveUnderline)
@@ -330,16 +337,28 @@ class Editor(QTextEdit):
             selections.append(sel)
         self.setExtraSelections(selections)
 
+    def issue_at(self, pos):
+        # A click in the right half of the last letter still belongs to the word.
+        # ExactHit also keeps clicks in the blank margin from opening a suggestion.
+        point = QPointF(pos.x() + self.horizontalScrollBar().value(),
+                        pos.y() + self.verticalScrollBar().value())
+        ix = self.document().documentLayout().hitTest(point, Qt.ExactHit)
+        for start, end, issue in self.ranges:
+            if start <= ix < end:
+                return issue
+        return None
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        on_issue = self.ranges and self.issue_at(event.position().toPoint())
+        self.viewport().setCursor(Qt.PointingHandCursor if on_issue and not event.buttons() else Qt.IBeamCursor)
+
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        if event.button() != Qt.LeftButton or self.textCursor().hasSelection():
-            return
-        ix = self.cursorForPosition(event.position().toPoint()).position()
-        value = self.toPlainText()
-        for issue in self.issues:
-            if utf16(value[:issue.start]) <= ix < utf16(value[:issue.end]):
+        if event.button() == Qt.LeftButton and not self.textCursor().hasSelection():
+            issue = self.issue_at(event.position().toPoint())
+            if issue:
                 self.issue_click.emit(issue, event.globalPosition().toPoint())
-                return
 
 
 def utf16(text):
@@ -347,19 +366,20 @@ def utf16(text):
 
 
 def copy_button(editor, accessible_name):
-    b = button("复制")
+    b = button("Copy")
     b.setAccessibleName(accessible_name)
+    b.setMinimumWidth(78)  # Keep adjacent actions still while showing “Copied”.
     b.setToolTip(accessible_name)
     b.setIcon(glyph("copy"))
     b.setIconSize(QSize(15, 15))
 
     def update():
         b.setEnabled(bool(editor.toPlainText()))
-        b.setText("复制")
+        b.setText("Copy")
 
     def copy():
         QApplication.clipboard().setText(editor.toPlainText())
-        b.setText("已复制")
+        b.setText("Copied")
         QTimer.singleShot(1100, b, update)
 
     b.clicked.connect(copy)
@@ -371,18 +391,20 @@ def copy_button(editor, accessible_name):
 class Panel(Paper):
     closing = Signal()
     settings_requested = Signal()
+    action_requested = Signal()
+    review_requested = Signal()
 
     def __init__(self):
         super().__init__(TOP)
-        self.setWindowTitle("WhiteDot 英文校对")
+        self.setWindowTitle("WhiteDot Editor")
         header = QHBoxLayout()
         header.setSpacing(8)
         header.addWidget(BrandMark())
         header.addWidget(text_label("WhiteDot", "wordmark"))
         header.addStretch()
-        self.settings_button = tool_button("settings", "AI 服务与密钥", self.settings_requested.emit)
+        self.settings_button = tool_button("settings", "AI settings", self.settings_requested.emit)
         header.addWidget(self.settings_button)
-        self.dismiss = tool_button("close", "收起（Esc）", self.closing.emit)
+        self.dismiss = tool_button("close", "Hide editor (Esc)", self.closing.emit)
         header.addWidget(self.dismiss)
         self.box.addLayout(header)
         self.box.addSpacing(9)
@@ -392,9 +414,9 @@ class Panel(Paper):
         self.editor = Editor()
         self.editor.setMinimumHeight(52)
         row = QHBoxLayout()
-        row.addWidget(text_label("原文", "sectionLabel"))
+        row.addWidget(text_label("Draft", "sectionLabel"))
         row.addStretch()
-        self.count = text_label("0 词", "count")
+        self.count = text_label("0 words", "count")
         row.addWidget(self.count)
         self.editor.textChanged.connect(self.count_words)
         self.box.addLayout(row)
@@ -403,26 +425,35 @@ class Panel(Paper):
 
         toolbar = QFrame()
         toolbar.setObjectName("toolbar")
-        actions = QHBoxLayout(toolbar)
-        actions.setContentsMargins(9, 4, 4, 4)
-        actions.setSpacing(3)
+        self.actions = QGridLayout(toolbar)
+        self.actions.setContentsMargins(6, 4, 4, 4)
+        self.actions.setHorizontalSpacing(4)
+        self.actions.setVerticalSpacing(0)
+        self.actions.setColumnStretch(0, 1)
+        self.context_action = button("", self.action_requested.emit)
+        self.context_action.setObjectName("context")
+        self.context_action.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.actions.addWidget(self.context_action, 1, 0, Qt.AlignLeft)
+        self.context_action.hide()
         self.status = text_label("", "caption")
         self.status.setWordWrap(True)
         self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.status.setAccessibleName("校对状态")
-        actions.addWidget(self.status, 1)
-        self.original_copy = copy_button(self.editor, "复制原文")
-        actions.addWidget(self.original_copy)
-        self.rewrite = button("语法重写")
+        self.status.setAccessibleName("Proofreading status")
+        self.actions.addWidget(self.status, 1, 0)
+        self.original_copy = copy_button(self.editor, "Copy draft")
+        self.actions.addWidget(self.original_copy, 1, 1)
+        self.rewrite = button("Rewrite")
         self.rewrite.setObjectName("action")
         self.rewrite.setIcon(glyph("rewrite", "#ffffff"))
         self.rewrite.setIconSize(QSize(16, 16))
         self.rewrite.setEnabled(False)
-        self.rewrite.setToolTip("语法重写（⌘ Return）" if sys.platform == "darwin" else "语法重写（Ctrl + Enter）")
+        self.rewrite.setToolTip("Rewrite (⌘ Return)" if sys.platform == "darwin" else "Rewrite (Ctrl+Enter)")
         for key in ("Ctrl+Return", "Ctrl+Enter"):
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(self.rewrite.click)
-        actions.addWidget(self.rewrite)
+        self.actions.addWidget(self.rewrite, 1, 2)
+        review_key = QShortcut(QKeySequence("F7"), self)
+        review_key.activated.connect(self.review_requested.emit)
         self.box.addSpacing(10)
         self.box.addWidget(toolbar)
 
@@ -433,13 +464,13 @@ class Panel(Paper):
         self.result = QTextEdit()
         prepare_text(self.result)
         self.result.setReadOnly(True)
-        self.result.setAccessibleName("语法重写结果")
-        self.result.setPlaceholderText("等待重写结果…")
+        self.result.setAccessibleName("Rewritten draft")
+        self.result.setPlaceholderText("Rewriting…")
         self.result.setMinimumHeight(56)
         row = QHBoxLayout()
-        row.addWidget(text_label("重写结果", "sectionLabel"))
+        row.addWidget(text_label("Revision", "sectionLabel"))
         row.addStretch()
-        self.result_copy = copy_button(self.result, "复制重写结果")
+        self.result_copy = copy_button(self.result, "Copy revision")
         row.addWidget(self.result_copy)
         result_box.addLayout(row)
         result_box.addSpacing(3)
@@ -448,9 +479,49 @@ class Panel(Paper):
         # text viewports comparable space when the result is visible.
         self.box.addWidget(self.result_group, 4)
         self.result_group.hide()
+        self.result.textChanged.connect(self.mark_revision)
+        self.result.setToolTip("New and changed words are highlighted.")
+
+    def set_context_action(self, text):
+        # Put long explanations on their own line; keep the common case compact.
+        self.context_action.setText(text or "")
+        self.context_action.setToolTip("Review suggestions (F7)" if text and "suggestion" in text else "")
+        self.context_action.setVisible(bool(text))
+        self.actions.removeWidget(self.status)
+        if text:
+            self.actions.addWidget(self.status, 0, 0, 1, 3)
+        else:
+            self.actions.addWidget(self.status, 1, 0)
+        self.status.setVisible(bool(self.status.text()) or not text)
 
     def count_words(self):
-        self.count.setText(f"{len(WORDS.findall(self.editor.toPlainText())):,} 词")
+        total = len(WORDS.findall(self.editor.toPlainText()))
+        self.count.setText(f"{total:,} word" if total == 1 else f"{total:,} words")
+
+    def mark_revision(self):
+        text = self.result.toPlainText()
+        selections = []
+        if text:
+            original = self.editor.toPlainText()
+            parts = r"\w+(?:[’'-]\w+)*|[^\w\s]"
+            before = re.findall(parts, original)
+            spans = list(re.finditer(parts, text))
+            after = [m.group() for m in spans]
+            # The comparison is a reading aid. Bound its cost on long pastes.
+            if max(len(before), len(after)) <= 1600:
+                changes = SequenceMatcher(None, before, after).get_opcodes()
+                for tag, _, _, first, last in changes:
+                    if tag not in ("insert", "replace"):
+                        continue
+                    cursor = self.result.textCursor()
+                    cursor.setPosition(utf16(text[:spans[first].start()]))
+                    cursor.setPosition(utf16(text[:spans[last - 1].end()]), QTextCursor.KeepAnchor)
+                    mark = QTextEdit.ExtraSelection()
+                    mark.cursor = cursor
+                    mark.format.setBackground(QColor("#e3ecfa"))
+                    mark.format.setForeground(QColor("#263e66"))
+                    selections.append(mark)
+        self.result.setExtraSelections(selections)
 
     def sizeHint(self):
         return QSize(468, 285 if self.result_group.isHidden() else 450)
@@ -468,9 +539,13 @@ class Panel(Paper):
 
 class Suggestion(Paper):
     chosen = Signal(str)
+    dismissed = Signal()
 
-    def __init__(self, issue):
-        super().__init__(NO_FOCUS)
+    def __init__(self, issue, parent=None):
+        super().__init__(Qt.Popup | Qt.FramelessWindowHint, parent)
+        self.setWindowTitle("Spelling and grammar suggestions")
+        self.choices = []
+        self.return_to_editor = False
         self.box.setContentsMargins(21, 13, 21, 18)
         self.box.setSpacing(5)
         self.setMaximumWidth(340)
@@ -478,14 +553,49 @@ class Suggestion(Paper):
         label = text_label(issue.original, "word")
         label.setWordWrap(True)
         top.addWidget(label, 1)
-        top.addWidget(tool_button("close", "关闭建议", self.hide))
+        top.addWidget(tool_button("close", "Dismiss suggestion", self.dismiss_to_editor))
         self.box.addLayout(top)
         if issue.explanation:
             why = text_label(issue.explanation, "caption")
             why.setWordWrap(True)
             self.box.addWidget(why)
         for word in issue.suggestions:
-            b = button(word.replace("&", "&&") or "删除")
+            b = button(word.replace("&", "&&") or "Delete")
             b.setObjectName("candidate")
             b.clicked.connect(lambda checked=False, value=word: self.chosen.emit(value))
+            b.setFocusPolicy(Qt.StrongFocus)
+            b.setAccessibleName("Replace with " + word if word else "Delete this text")
+            b.setToolTip(word or "Delete this text")
             self.box.addWidget(b)
+            self.choices.append(b)
+        for key, step in (("Down", 1), ("Up", -1)):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(lambda delta=step: self.move_choice(delta))
+        for key in ("Return", "Enter"):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(self.accept_focused)
+        escape = QShortcut(QKeySequence("Esc"), self)
+        escape.activated.connect(self.dismiss_to_editor)
+
+    def dismiss_to_editor(self):
+        self.return_to_editor = True
+        self.hide()
+
+    def focus_choices(self):
+        if self.choices:
+            self.choices[0].setFocus(Qt.OtherFocusReason)
+
+    def move_choice(self, delta):
+        current = self.focusWidget()
+        index = self.choices.index(current) if current in self.choices else -1
+        if self.choices:
+            self.choices[(index + delta) % len(self.choices)].setFocus(Qt.OtherFocusReason)
+
+    def accept_focused(self):
+        item = self.focusWidget()
+        if isinstance(item, QPushButton):
+            item.click()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.dismissed.emit()

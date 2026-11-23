@@ -1,21 +1,22 @@
-# Windows 便携版与开发交接
+# WhiteDot on Windows
 
-## 运行与升级
+## Start the portable app
 
-从当前版本的 GitHub Release 下载 `WhiteDot-windows-x64.exe`，放入固定文件夹并双击。运行时会在任务栏通知区域显示图标，屏幕右侧会出现可以拖动的白点。打包程序携带 Python 和 Qt，首次启动可能需要几秒。
+Download `WhiteDot-windows-x64.exe` from the release for your version. Store it in a permanent folder and double-click it. The first launch can take a few seconds while Windows loads the bundled Python and Qt runtime. The movable white dot appears on screen. The tray icon may be under the notification area's up arrow. [Windows EXE in this checkout](../dist/WhiteDot-windows-x64.exe) · [WhiteDot releases](https://github.com/Peisong-Zheng/WhiteDot/releases)
 
-升级旧版时，先从托盘退出正在运行的 WhiteDot，再替换原位置的 EXE。桌面程序沿用当前 Windows 账户的模型配置、凭据和白点位置。若曾手动加载旧版 WhiteDot 浏览器扩展，可在浏览器的扩展管理页面移除。已启用登录启动且调整过 EXE 位置时，在托盘中关闭再打开该选项，以更新启动路径。
+When upgrading, copy any draft you want to keep and quit the running app from the tray. Then replace the old EXE in the same folder. WhiteDot reuses the current user's key, provider settings and launcher position. If you move the EXE after enabling login startup, toggle the login setting again to register the new path. If the 0.1 browser extension is still installed, you may remove it in the browser's extension manager.
 
-1. 右键白点或托盘图标，打开 AI 服务设置。选择服务商、地址和模型，填入自己的 API Key 并验证。验证将向所选服务提交一个固定英文样例。
-2. 点击白点打开编辑器，输入或粘贴英文。例如 `She go to teh library every day.`。停顿后会触发校对，点击有红色下划线的词查看并应用建议。
-3. 需要整段修改时使用重写操作，核对结果后复制。收起后再打开可继续编辑这一轮运行的草稿。
-4. 完成后可以收起白点面板。桌面程序只在自己的面板内接收输入，其他应用可继续使用自己的校对工具。
+Click the dot and choose **Connect AI**. Enter your key in **AI settings** and choose **Verify and save** to test the selected model with a fixed sample. After that, type or paste a draft in WhiteDot. Pause to see corrections, click a red underline to apply a suggestion, or choose **Rewrite** and review the result below the draft. Copy either section and paste it into the destination app yourself. WhiteDot keeps the current draft in memory while the panel is collapsed.
 
-API Key 保存在 Windows 凭据管理器中。普通偏好位于 `%APPDATA%\WhiteDot\settings.json`。Release 提供 SHA-256 校验表，可在 PowerShell 中运行 `Get-FileHash .\WhiteDot-windows-x64.exe` 进行比对。当前构建流程生成未进行 Authenticode 签名的 EXE。
+Credentials are stored in Windows Credential Manager. Ordinary preferences are in `%APPDATA%\WhiteDot\settings.json`. The portable executable is unsigned. To verify a downloaded release against the published `SHA256SUMS.txt`, use:
 
-## 从源码运行
+```powershell
+Get-FileHash .\WhiteDot-windows-x64.exe -Algorithm SHA256
+```
 
-在 Windows x64 安装 Python 3.11，用 VS Code 打开包含 `main.py` 和 `WhiteDot.spec` 的项目根目录。在 PowerShell 中执行：
+## Develop and build
+
+Install 64-bit Python 3.11 and open the project folder containing `main.py` and `WhiteDot.spec` in VS Code. These PowerShell commands work without activating the virtual environment:
 
 ```powershell
 py -3.11 -m venv .venv
@@ -25,35 +26,31 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-构建前，先通过托盘退出从 `dist` 运行的旧程序。以下命令生成单文件便携版，并在打包产物上执行离线自检。
+Quit a running copy from `dist` before rebuilding it. The build script generates the single-file EXE and checks that it can launch and exercise the editor offline:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build.py
 ```
 
-输出文件为 `dist\WhiteDot-windows-x64.exe`。在普通 Windows 用户账号中可直接运行。
+Find the output at `dist\WhiteDot-windows-x64.exe`. You can use **Properties → Details** to check the file and product versions.
 
-## 实机验收
+## Acceptance checks
 
-| 场景 | 检查方法 |
+| Scenario | What to verify |
 | --- | --- |
-| 白点 | 在明、暗壁纸上观察白点与阴影是否同心。拖动到另一台显示器，退出后重开，确认位置恢复。 |
-| 开始输入 | 在其他软件中打字，随后点击白点，应打开独立编辑器并能立即输入。 |
-| 词级修改 | 在面板内输入 `🙂 I saw teh cat.`。等校对完成后点开错词，选择 `the`，确认 emoji 和其余文字保留。 |
-| 前后版本 | 在等待校对或重写时继续修改正文，确认旧结果不会盖掉新内容。 |
-| 复制 | 检查空文本时复制按钮状态，然后分别复制非空原文和重写结果，在记事本中核对。 |
-| 窗口 | 核对靠近屏幕四边、100% 与 150% 缩放、跨显示器移动时，面板与操作按钮可见。 |
-| 托盘 | 打开模型设置并验证一次错误 Key，确认显示错误且上次有效配置仍可使用。切换登录启动并重新登录验收。 |
+| First launch | Open the dot. Confirm the editor accepts input right away and gives a clear route to setting up your provider. |
+| Suggestions | Type `I saw teh cat.` and choose `the` from the highlighted word. Repeat using F7 and Enter. Also try a repeated typo and a typo after an emoji. |
+| Revisions | Edit before a check or rewrite finishes. The old result must never replace a newer draft. |
+| Draft and result | Rewrite with Ctrl+Enter. Copy each section into a scratch document and compare it with the text you saw. Collapse and reopen the editor to resume your draft. |
+| Launcher and scaling | View the dot against light and dark backgrounds. Move it between 100% and 150% displays and near each edge. Check that the editor, controls and suggestion list stay visible. |
+| Settings and recovery | Try an invalid key, check the English error, then cancel. Confirm the previous validated configuration still works. Toggle login startup and test the next sign-in. |
 
-共享 UI 在 `whitedot/windows_ui.py`，面板状态和后台任务在 `whitedot/app.py`。服务商兼容和凭据存储分别在 `whitedot/provider.py`、`whitedot/settings.py`。调整登录启动时检查 `whitedot/startup.py`。
+For a Windows coding agent:
 
-可直接交给 Windows 端 AI 代理的任务：
+> Start WhiteDot from source, run the offline tests and package the x64 EXE. Verify the scenarios above using synthetic drafts. I will enter my provider key in the app. Record the Windows version, display scaling and repeatable steps for any failure. After changes, run the same suite and the packaged smoke test again.
 
-> 按 docs/WINDOWS.md 从源码运行 WhiteDot、执行离线测试并构建 x64 便携 EXE。用合成样例检查白点在不同背景和缩放下的视觉效果，以及编辑器输入、建议替换、重写、复制和草稿收起再打开的流程。由我在程序中输入模型密钥。记录 Windows 版本、屏幕缩放和可复现步骤，修复后运行同一套测试与打包命令。
+## Publish both downloads
 
-## 发布到 GitHub
-
-1. 在 VS Code 将本轮修改同步到已配置的 GitHub 仓库。
-2. 打开仓库的 **Actions → Build desktop releases → Run workflow**，选择已同步的分支。将 **Optional release tag** 留空可先生成 Actions Artifacts。
-3. 确认试用通过后，填写新的版本标签（例如 `v0.2.0`）并运行。两个平台都构建成功后，工作流把 macOS ZIP、Windows 便携 EXE 和 SHA-256 校验表上传至同一 Release。向远程推送版本标签也可触发发布。
-4. macOS 上可以开发共享源码。Windows EXE 在 Windows 本机或同一仓库的 Windows runner 上构建。
+1. Sync the source to your GitHub repository from VS Code.
+2. Open **Actions → Build desktop releases → Run workflow** and choose the synced branch. Leave the release tag empty for downloadable test artifacts.
+3. To publish, specify an unused version tag such as `v0.3.0`. The workflow publishes the macOS ZIP, portable Windows EXE and SHA-256 checksums together after both builds pass. Pushing a version tag also triggers the workflow.

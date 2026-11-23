@@ -1,14 +1,33 @@
-# WhiteDot 0.2.0 验收记录
+# WhiteDot 0.3.0 product review
 
-本版只校对 WhiteDot 面板内的草稿。2026-11-23 在 Apple 芯片 Mac 上完成如下验证。
+Tested on 23 November 2026 with English UI text, synthetic drafts and disposable settings.
 
-| 范围 | 检查结果 |
+## Findings and changes
+
+| User journey | Problem found | What changed |
+| --- | --- | --- |
+| Start a first draft | A new user could type but had to discover the connection settings before proofreading would work. | The empty editor offers **Connect AI**. Verification requires an endpoint, model and key. An unsuccessful verification keeps the dialog open with an English explanation. Returning to the editor restores the draft and typing focus. |
+| Correct a word | A short word such as “is” could match inside “This”. Clicking the last letter or using only the keyboard made a correction difficult to select. | Matching respects word boundaries and occurrences. Clicking a marked character or pressing F7 opens the suggestion. Arrow keys select, Enter applies and Esc returns to writing. **Delete** is available for a redundant word when the provider recommends removal. |
+| Compare and copy | The revision could be hard to compare with the draft. Trying a second rewrite could hide a good first result when the connection failed. | The revision highlights added and changed text and keeps its own Copy button. A failed regeneration preserves the previous revision and offers **Retry rewrite**. For very long drafts the editor skips change highlighting to keep the window responsive. |
+| Recover after an error | After a transient error the user had to change the draft to trigger another check. | The toolbar offers **Retry check** or **Retry rewrite**, with an explanation. Repeated clicks and continued typing during a check are covered by regression tests. |
+| Return to work | Reopening a running app could appear to do nothing. Quitting could discard an uncopied draft. | Opening the executable again brings back the existing editor. Reopening a completed draft reuses the result. **Quit WhiteDot** offers to copy uncopied work or keep writing. |
+| Change providers or move the app | Switching away from a custom provider could lose the saved model and endpoint. A login item could still point to the old executable after a move. | Validated provider profiles survive switching and upgrading. The login menu checks the current path. Turning the setting on again registers the new location. |
+
+## Acceptance results
+
+- **macOS desktop.** The real Cocoa windows were exercised on an Apple silicon Mac. The path included opening the dot, typing, verifying a rejected key and then a valid fixture key, accepting a red-underlined suggestion, rewriting with the keyboard, copying the revision, retrying after a service error, collapsing, reopening and cancelling a quit. The app's local activation socket also reopened the editor. The README screenshot was captured from this run.
+- **Provider behavior.** A local HTTP fixture returned the same response format as a compatible provider and generated HTTP 401 and 503 failures on demand. Tests covered English explanations, DeepSeek's disabled thinking setting, text offsets after emoji, repeated words, preserving lines and indentation, and discarding stale responses. Clipboard payloads and the absence of a plain-text key in preferences were checked with disposable data.
+- **Launcher and layout.** Pixel tests compare the halo horizontally and vertically at 1× and 2×. Other tests cover restoring the dot after its display disappears, draft and result copy availability, and singular and plural word counts. The Windows Qt platform was also exercised at 150% scale.
+- **Windows desktop compatibility.** The Windows x64 Qt backend ran under Wine on macOS. The fixture exercised editor focus, suggestion selection, rewriting, collapsing and reopening. It also wrote, read and removed a synthetic Windows credential and login entry in an isolated Wine profile. Physical Windows display changes, Explorer's notification area and the next real Windows sign-in still need a Windows machine.
+- **Service coverage.** This review used a deterministic local provider. Live provider uptime, account permissions, billing and model output quality depend on the account and model in use. The optional live DeepSeek probe is documented in the README.
+
+## Packaged applications
+
+| Package | Checks on the final artifact |
 | --- | --- |
-| 编辑器实际窗口 | 在 Cocoa 上点白点，光标落入编辑器。用合成样例验证输入、红线、点击错词并采纳候选、上下两栏重写、打开设置再返回原草稿、Esc 收起。界面截图来自这组真实控件。此轮 UI 测试用固定模型输出，未调用用户付费账户。 |
-| 白点阴影 | 在普通和双倍分辨率分别验证左右、上下四向的半透明阴影像素。112 像素实拍控件的透明度重心约为 (55.499, 55.499)，对应画布中心 (55.5, 55.5)。窗口关闭了额外的系统投影。 |
-| 请求与数据 | 应用入口、控制器、依赖和构建包已清理原先的外部输入框轮询、辅助功能读写、浏览器扩展及其本机服务。测试覆盖收起前取消待发请求、旧响应丢弃、连续编辑合并校对、设置验证失败回退、重复打开草稿不重复发送已完成的请求。 |
-| 离线回归 | macOS 上运行全部 24 项 Python 测试通过，另通过 `main.py --self-test`。设置测试使用模拟系统凭据。 |
-| 打包 | Apple 芯片 Mac 的发布 ZIP 已重新构建。解压后检查版本号、严格签名、内置 Spectral 字体、许可证以及应用自检。 |
-| Windows | 源码、测试和单文件 EXE 构建工作流已同步更新。Windows 原生窗口、缩放、托盘、登录启动以及实际 EXE 运行仍需 Windows 端验证。 |
+| Apple silicon macOS ZIP | Extracted the app, verified its strict ad-hoc signature and 0.3.0 bundle version, and ran its offline self-test with both the Cocoa and minimal Qt backends. The bundled Qt Python bindings require macOS 15 or later. |
+| Portable Windows x64 EXE | Checked its x64 GUI format and embedded 0.3.0 file and product versions. Ran its packaged self-test with both the Windows GUI and minimal Qt backends under Wine. Two Windows processes also exercised activation of the existing editor. |
 
-从仓库根目录运行 `python -m unittest discover -s tests -v` 可复查离线测试。Mac 和 Windows 的打包程序都支持 `--self-test`。需要使用自己的 DeepSeek 密钥验证服务端实际输出时，可运行 `python scripts/probe_deepseek.py` 并在隐藏输入提示中输入密钥。
+All 41 regression tests passed on macOS and under Windows CPython in Wine. A separate scan found no remaining Han text in the project's own source, tests or documentation.
+
+From the repository root, run `python -m unittest discover -s tests -v` for the 41 regression tests. The executable on each platform accepts `--self-test` for an offline packaging check. The [Windows guide](WINDOWS.md) includes the hands-on Windows checklist.

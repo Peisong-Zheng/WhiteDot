@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Optional release tag, e.g. v0.2.0 (leave empty for build artifacts)'
+        description: 'Optional release tag, e.g. v0.3.0 (leave empty for build artifacts)'
         required: false
         type: string
 
@@ -35,7 +35,7 @@ jobs:
           fi
           if [[ -n "$tag" ]]; then
             if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){0,2}([-+][A-Za-z0-9.-]+)?$ ]] || ! git check-ref-format "refs/tags/$tag"; then
-              echo "Use a version tag such as v0.2.0 or v0.2.0-beta.1." >&2
+              echo "Use a version tag such as v0.3.0 or v0.3.0-beta.1." >&2
               exit 1
             fi
           fi

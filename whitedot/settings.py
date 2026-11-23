@@ -39,7 +39,7 @@ def _vault():
     if sys.platform == "win32":
         from keyring.backends.Windows import WinVaultKeyring
         return WinVaultKeyring()
-    raise StorageError("当前系统缺少受支持的凭据存储。")
+    raise StorageError("Secure credential storage is unavailable on this system.")
 
 
 def _account(config: ProviderConfig) -> str:
@@ -47,6 +47,14 @@ def _account(config: ProviderConfig) -> str:
     # silently reuse credentials belonging to another server.
     identity = config.provider + "\n" + config.base_url.strip().rstrip("/")
     return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _read_config(raw) -> ProviderConfig | None:
+    if isinstance(raw, dict) and all(
+        isinstance(raw.get(k), str) and raw[k] for k in ("provider", "base_url", "model")
+    ):
+        return ProviderConfig(raw["provider"], raw["base_url"], raw["model"])
+    return None
 
 
 class Settings:
@@ -60,16 +68,23 @@ class Settings:
         except FileNotFoundError:
             self._data = {}
         except (OSError, ValueError, RecursionError):
-            raise StorageError("无法读取设置文件，请检查文件格式及系统读写权限。") from None
+            raise StorageError("WhiteDot could not read its settings. Check the file format and permissions.") from None
 
     @property
     def config(self) -> ProviderConfig:
-        raw = self.get("provider")
-        if isinstance(raw, dict) and all(
-            isinstance(raw.get(k), str) and raw[k] for k in ("provider", "base_url", "model")
-        ):
-            return ProviderConfig(raw["provider"], raw["base_url"], raw["model"])
-        return PRESETS["DeepSeek"]
+        return _read_config(self.get("provider")) or PRESETS["DeepSeek"]
+
+    def config_for(self, provider: str) -> ProviderConfig:
+        current = self.config
+        if current.provider == provider:
+            return current
+        profiles = self.get("profiles", {})
+        saved = _read_config(profiles.get(provider)) if isinstance(profiles, dict) else None
+        return saved if saved and saved.provider == provider else PRESETS[provider]
+
+    def _accounts(self) -> set[str]:
+        raw = self.get("accounts")
+        return {s for s in raw if isinstance(s, str)} if isinstance(raw, list) else set()
 
     def get(self, name: str, default=None):
         with self._lock:
@@ -89,7 +104,7 @@ class Settings:
                 os.fsync(f.fileno())
             tmp.replace(self._path)
         except (OSError, ValueError, TypeError):
-            raise StorageError("保存设置失败，请检查磁盘空间和目录权限。") from None
+            raise StorageError("Settings could not be saved. Check disk space and folder permissions.") from None
         finally:
             if tmp is not None:
                 tmp.unlink(missing_ok=True)
@@ -103,17 +118,17 @@ class Settings:
         with self._lock:
             target = config or self.config
             # Avoid an unnecessary keychain prompt on the first run.
-            if _account(target) not in self.get("accounts", []):
+            if _account(target) not in self._accounts():
                 return ""
             try:
                 return _vault().get_password(_SERVICE, _account(target)) or ""
             except Exception:
-                raise StorageError("无法读取系统凭据，请解锁钥匙串或检查 Windows 凭据管理器。") from None
+                raise StorageError("Unlock your system credential store and try again.") from None
 
     def save_provider(self, config: ProviderConfig, key: str) -> None:
         """Call after successful validation. A failed update preserves the active profile."""
         if not key.strip():
-            raise StorageError("API Key 不能为空。")
+            raise StorageError("Enter an API key.")
         with self._lock:
             account = _account(config)
             try:
@@ -121,10 +136,19 @@ class Settings:
                 previous = vault.get_password(_SERVICE, account)
                 vault.set_password(_SERVICE, account, key.strip())
             except Exception:
-                raise StorageError("无法保存 API Key，请允许访问系统钥匙串或 Windows 凭据管理器。") from None
+                raise StorageError("Allow access to your system credential store to save the API key.") from None
             try:
-                accounts = sorted(set(self.get("accounts", [])) | {account})
-                self._write({**self._data, "provider": asdict(config), "accounts": accounts})
+                # Before per-provider profiles, only the active one was saved.
+                # Preserve it the first time an upgrading user switches providers.
+                saved = self.get("profiles")
+                profiles = dict(saved) if isinstance(saved, dict) else {}
+                previous_config = _read_config(self.get("provider"))
+                if previous_config:
+                    profiles[previous_config.provider] = asdict(previous_config)
+                profiles[config.provider] = asdict(config)
+                accounts = sorted(self._accounts() | {account})
+                self._write({**self._data, "provider": asdict(config), "profiles": profiles,
+                             "accounts": accounts})
             except Exception:
                 try:
                     if previous is not None:
@@ -132,5 +156,5 @@ class Settings:
                     else:
                         vault.delete_password(_SERVICE, account)
                 except Exception:
-                    raise StorageError("保存设置失败，系统凭据可能已更新。请重新验证并保存。") from None
+                    raise StorageError("Settings could not be saved. The stored key may have changed. Validate and save again.") from None
                 raise
