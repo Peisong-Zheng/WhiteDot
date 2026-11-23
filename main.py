@@ -1,4 +1,4 @@
-"""WhiteDot desktop entry point."""
+"""Folio desktop entry point."""
 import hashlib
 import sys
 import time
@@ -9,7 +9,7 @@ from PySide6.QtCore import QIODevice, QLockFile, QStandardPaths
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from whitedot import __version__
+from whitedot import __version__, startup
 from whitedot.app import Controller
 from whitedot.settings import Settings, StorageError
 from whitedot.types import Issue
@@ -18,15 +18,28 @@ from whitedot.types import Issue
 def smoke(app):
     """Exercise the packaged manual editor with a fixture and no network requests."""
     from whitedot.provider import PRESETS, Provider
-    from whitedot.settings import _vault
+    from whitedot.settings import _account, _vault
     _vault()  # Verify that the bundled system keyring imports without reading a credential.
     Provider(PRESETS["DeepSeek"], "offline-placeholder")
 
+    class OfflineSettings(Settings):
+        def get_key(self, config=None):
+            raise AssertionError("Browsing settings must not read a saved credential")
+
     with tempfile.TemporaryDirectory() as tmp:
-        ctrl = Controller(app, Settings(Path(tmp) / "prefs.json"), testing=True)
+        prefs = OfflineSettings(Path(tmp) / "prefs.json")
+        prefs.set("accounts", [_account(prefs.config)])  # Old-format configured profile.
+        ctrl = Controller(app, prefs, testing=True)
         ctrl.dot.clicked.emit()
         panel = ctrl.panel
         assert panel.isVisible() and not panel.original_copy.isEnabled()
+        ctrl.configure()
+        dialog = ctrl.dialog
+        assert dialog.saved_key.isVisible() and dialog.key.isHidden() and not dialog.key.text()
+        dialog.change_key.click()
+        assert dialog.key.isVisible() and not dialog.key.text()
+        dialog.reject()
+        assert panel.isVisible()
         panel.editor.setPlainText("😀 teh")
         issue = Issue(2, 5, "teh", ("the",), "Spelling")
         ctrl.issues = [issue]
@@ -76,35 +89,43 @@ def listen_for_launch(name, controller):
 
 def main():
     app = QApplication(sys.argv)
+    # Share the old per-user lock so an upgrade cannot leave two floating editors.
     app.setApplicationName("WhiteDot")
     app.setOrganizationName("WhiteDot")
+    runtime = Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
+    app.setApplicationName("Folio")
+    app.setOrganizationName("Folio")
+    app.setApplicationDisplayName("Folio")
     app.setApplicationVersion(__version__)
     app.setQuitOnLastWindowClosed(False)
     if "--self-test" in sys.argv:
         return smoke(app)
-    runtime = Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
     try:
         runtime.mkdir(parents=True, exist_ok=True)
     except OSError:
-        QMessageBox.critical(None, "WhiteDot", "WhiteDot cannot open its settings folder. Check your account permissions.")
+        QMessageBox.critical(None, "Folio", "Folio cannot open its settings folder. Check your account permissions.")
         return 1
-    name = "WhiteDot-" + hashlib.sha256(str(runtime).encode()).hexdigest()[:16]
+    name = "Folio-" + hashlib.sha256(str(runtime).encode()).hexdigest()[:16]
     lock = QLockFile(str(runtime / "instance.lock"))
     if not lock.tryLock(0):
         if lock.error() != QLockFile.LockFailedError:
-            QMessageBox.critical(None, "WhiteDot", "WhiteDot could not create its startup lock. Check your account permissions.")
+            QMessageBox.critical(None, "Folio", "Folio could not create its startup lock. Check your account permissions.")
             return 1
         if not activate_existing(name):
-            QMessageBox.information(None, "WhiteDot is already running",
-                                    "Click the white dot or open WhiteDot from the tray. "
-                                    "If you just upgraded, quit the previous version and open WhiteDot again.")
+            QMessageBox.information(None, "An editor is already running",
+                                    "If WhiteDot is open, quit it from its menu and open Folio again. "
+                                    "If Folio is already open, click its floating dot to resume writing.")
         return 0
     try:
         prefs = Settings()
         controller = Controller(app, prefs)
     except (StorageError, RuntimeError) as exc:
-        QMessageBox.critical(None, "WhiteDot", str(exc))
+        QMessageBox.critical(None, "Folio", str(exc))
         return 1
+    try:
+        startup.upgrade_login_item()
+    except OSError:
+        controller.notify("To update the login item, choose Open at login in the dot’s menu.")
     server = listen_for_launch(name, controller)
     try:
         return app.exec()

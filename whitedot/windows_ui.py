@@ -19,15 +19,13 @@ STYLE = """
 QWidget { color:#232a36; font-size:13px; }
 QDialog { background:#fafbfc; }
 QLabel { background:transparent; }
-QLabel#wordmark { font-family:Spectral; font-size:26px; color:#263047; }
 QLabel#heading { font-size:18px; font-weight:600; }
 QLabel#sectionLabel { font-size:12px; color:#4c566d; font-weight:600; }
 QLabel#count, QLabel#caption { font-size:12px; color:#5e6878; }
-QPushButton#context { color:#344b84; font-weight:600; text-align:left; padding:3px 7px; }
+QPushButton#context { color:#344b84; font-weight:600; text-align:left; padding:3px 4px; }
 QComboBox QAbstractItemView { background:white; color:#232a36; selection-background-color:#d9e3ff; selection-color:#182444; }
 QLabel#word { font-family:Spectral; font-size:20px; color:#222e46; }
 QFrame#rule { background:#e0e3e9; border:none; }
-QFrame#toolbar { background:#f5f6f9; border:1px solid #e2e5eb; border-radius:9px; }
 QTextEdit { border:0; padding:0; background:transparent; color:#242a38;
   placeholder-text-color:#687283; selection-background-color:#d9e3ff; selection-color:#182444; font-family:Spectral; font-size:21px; }
 QLineEdit, QComboBox { background:white; color:#252e40; border:1px solid #c2c9d3;
@@ -40,9 +38,9 @@ QPushButton:hover { background:#e9ecf3; color:#253652; }
 QPushButton:pressed { background:#dde2ed; }
 QPushButton:focus { border-color:#6479b1; }
 QPushButton:disabled { color:#87909e; }
-QPushButton#action { background:#35477d; color:white; border:1px solid #35477d; padding:4px 12px; }
-QPushButton#action:hover { background:#273a70; }
-QPushButton#action:pressed { background:#20305c; }
+QPushButton#action { background:#354252; color:white; border:1px solid #354252; padding:4px 12px; }
+QPushButton#action:hover { background:#293545; }
+QPushButton#action:pressed { background:#202a36; }
 QPushButton#action:focus { border:2px solid #849be0; }
 QPushButton#action:disabled { color:#737d91; background:#e5e8ee; border-color:#e5e8ee; }
 QPushButton#tool { padding:0; min-height:0; }
@@ -121,20 +119,18 @@ def icon():
     return QIcon(pix)
 
 
-def glyph(kind, color="#535e75"):
+def glyph(kind):
     out = QIcon()
-    for mode, ink in [(QIcon.Normal, color), (QIcon.Disabled, "#8792a3")]:
+    for mode, ink in [(QIcon.Normal, "#535e75"), (QIcon.Disabled, "#8792a3")]:
         pix = QPixmap(48, 48)
         pix.fill(Qt.transparent)
         p = QPainter(pix)
         p.scale(2, 2)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(QPen(QColor(ink), 1.65, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        def line(x1, y1, x2, y2):
-            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
         if kind == "close":
-            line(7, 7, 17, 17)
-            line(17, 7, 7, 17)
+            p.drawLine(QPointF(7, 7), QPointF(17, 17))
+            p.drawLine(QPointF(17, 7), QPointF(7, 17))
         elif kind == "copy":
             p.drawRoundedRect(QRectF(8.5, 8.5, 11, 12), 2.3, 2.3)
             path = QPainterPath(QPointF(15.5, 5.6))
@@ -144,25 +140,6 @@ def glyph(kind, color="#535e75"):
             path.lineTo(4.3, 13.4)
             path.quadTo(4.3, 15.5, 6.2, 15.5)
             p.drawPath(path)
-        elif kind == "rewrite":
-            path = QPainterPath(QPointF(5, 18))
-            path.lineTo(6, 13.5)
-            path.lineTo(15.6, 4)
-            path.quadTo(16.5, 3.2, 17.5, 4.2)
-            path.lineTo(19.3, 6)
-            path.quadTo(20.1, 7, 19.1, 8)
-            path.lineTo(9.5, 17.1)
-            path.closeSubpath()
-            p.drawPath(path)
-            line(14, 6, 17.5, 9.5)
-            line(13, 19.5, 20, 19.5)
-        elif kind == "settings":
-            line(4, 7.5, 9, 7.5)
-            line(14, 7.5, 20, 7.5)
-            line(4, 16.5, 13, 16.5)
-            line(18, 16.5, 20, 16.5)
-            p.drawEllipse(QPointF(11.5, 7.5), 2.5, 2.5)
-            p.drawEllipse(QPointF(15.5, 16.5), 2.5, 2.5)
         p.end()
         pix.setDevicePixelRatio(2)
         out.addPixmap(pix, mode)
@@ -185,8 +162,8 @@ class Dot(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(56, 56)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Click to write in WhiteDot. Drag to move.")
-        self.setAccessibleName("Open or hide the WhiteDot editor")
+        self.setToolTip("Click to write in Folio. Drag to move.")
+        self.setAccessibleName("Open or hide the Folio editor")
         self.origin = None
         self.dragging = False
         native_float(self)
@@ -277,23 +254,6 @@ def text_label(text, name):
     label.setObjectName(name)
     label.setTextFormat(Qt.PlainText)
     return label
-
-
-class BrandMark(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setFixedSize(25, 25)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor("#28344a"))
-        p.drawRoundedRect(QRectF(0.5, 0.5, 24, 24), 7, 7)
-        p.setBrush(QColor("#586278"))
-        p.drawEllipse(QPointF(12.5, 12.5), 7.3, 7.3)
-        p.setBrush(QColor("#fafbfe"))
-        p.drawEllipse(QPointF(12.5, 12.5), 5.2, 5.2)
 
 
 def prepare_text(widget):
@@ -390,43 +350,32 @@ def copy_button(editor, accessible_name):
 
 class Panel(Paper):
     closing = Signal()
-    settings_requested = Signal()
     action_requested = Signal()
     review_requested = Signal()
 
     def __init__(self):
         super().__init__(TOP)
-        self.setWindowTitle("WhiteDot Editor")
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        header.addWidget(BrandMark())
-        header.addWidget(text_label("WhiteDot", "wordmark"))
-        header.addStretch()
-        self.settings_button = tool_button("settings", "AI settings", self.settings_requested.emit)
-        header.addWidget(self.settings_button)
-        self.dismiss = tool_button("close", "Hide editor (Esc)", self.closing.emit)
-        header.addWidget(self.dismiss)
-        self.box.addLayout(header)
-        self.box.addSpacing(9)
-        self.box.addWidget(rule())
-        self.box.addSpacing(14)
+        self.setWindowTitle("Folio Editor")
+        self.box.setContentsMargins(25, 13, 25, 20)
 
         self.editor = Editor()
         self.editor.setMinimumHeight(52)
-        row = QHBoxLayout()
-        row.addWidget(text_label("Draft", "sectionLabel"))
-        row.addStretch()
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        header.addWidget(text_label("Draft", "sectionLabel"))
         self.count = text_label("0 words", "count")
-        row.addWidget(self.count)
+        self.count.hide()
+        header.addWidget(self.count)
+        header.addStretch()
+        self.dismiss = tool_button("close", "Hide editor (Esc)", self.closing.emit)
+        header.addWidget(self.dismiss)
         self.editor.textChanged.connect(self.count_words)
-        self.box.addLayout(row)
+        self.box.addLayout(header)
         self.box.addSpacing(5)
         self.box.addWidget(self.editor, 3)
 
-        toolbar = QFrame()
-        toolbar.setObjectName("toolbar")
-        self.actions = QGridLayout(toolbar)
-        self.actions.setContentsMargins(6, 4, 4, 4)
+        self.actions = QGridLayout()
+        self.actions.setContentsMargins(0, 0, 0, 0)
         self.actions.setHorizontalSpacing(4)
         self.actions.setVerticalSpacing(0)
         self.actions.setColumnStretch(0, 1)
@@ -444,8 +393,6 @@ class Panel(Paper):
         self.actions.addWidget(self.original_copy, 1, 1)
         self.rewrite = button("Rewrite")
         self.rewrite.setObjectName("action")
-        self.rewrite.setIcon(glyph("rewrite", "#ffffff"))
-        self.rewrite.setIconSize(QSize(16, 16))
         self.rewrite.setEnabled(False)
         self.rewrite.setToolTip("Rewrite (⌘ Return)" if sys.platform == "darwin" else "Rewrite (Ctrl+Enter)")
         for key in ("Ctrl+Return", "Ctrl+Enter"):
@@ -454,13 +401,15 @@ class Panel(Paper):
         self.actions.addWidget(self.rewrite, 1, 2)
         review_key = QShortcut(QKeySequence("F7"), self)
         review_key.activated.connect(self.review_requested.emit)
-        self.box.addSpacing(10)
-        self.box.addWidget(toolbar)
+        self.box.addSpacing(8)
+        self.box.addLayout(self.actions)
 
         self.result_group = QWidget()
         result_box = QVBoxLayout(self.result_group)
-        result_box.setContentsMargins(0, 15, 0, 0)
+        result_box.setContentsMargins(0, 13, 0, 0)
         result_box.setSpacing(0)
+        result_box.addWidget(rule())
+        result_box.addSpacing(8)
         self.result = QTextEdit()
         prepare_text(self.result)
         self.result.setReadOnly(True)
@@ -481,6 +430,12 @@ class Panel(Paper):
         self.result_group.hide()
         self.result.textChanged.connect(self.mark_revision)
         self.result.setToolTip("New and changed words are highlighted.")
+        self.setTabOrder(self.editor, self.context_action)
+        self.setTabOrder(self.context_action, self.original_copy)
+        self.setTabOrder(self.original_copy, self.rewrite)
+        self.setTabOrder(self.rewrite, self.result)
+        self.setTabOrder(self.result, self.result_copy)
+        self.setTabOrder(self.result_copy, self.dismiss)
 
     def set_context_action(self, text):
         # Put long explanations on their own line; keep the common case compact.
@@ -497,6 +452,7 @@ class Panel(Paper):
     def count_words(self):
         total = len(WORDS.findall(self.editor.toPlainText()))
         self.count.setText(f"{total:,} word" if total == 1 else f"{total:,} words")
+        self.count.setVisible(total > 0)
 
     def mark_revision(self):
         text = self.result.toPlainText()
@@ -524,7 +480,7 @@ class Panel(Paper):
         self.result.setExtraSelections(selections)
 
     def sizeHint(self):
-        return QSize(468, 285 if self.result_group.isHidden() else 450)
+        return QSize(448, 218 if self.result_group.isHidden() else 382)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:

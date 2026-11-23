@@ -7,17 +7,17 @@ sys.path.insert(0, str(root))
 from whitedot import __version__
 
 macos = sys.platform == "darwin"
-icon = str(root / "build" / "artwork" / ("WhiteDot.icns" if macos else "WhiteDot.ico"))
+icon = str(root / "build" / "artwork" / ("Folio.icns" if macos else "Folio.ico"))
 a = Analysis([str(root / "main.py")], pathex=[str(root)],
              datas=[(str(root / "whitedot" / "assets"), "whitedot/assets")],
              excludes=["PyQt5", "PyQt6", "tkinter"])
 pyz = PYZ(a.pure)
 if macos:
-    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="WhiteDot", console=False,
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Folio", console=False,
               strip=False, upx=False, icon=icon)
-    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="WhiteDot")
-    app = BUNDLE(coll, name="WhiteDot.app", icon=icon, bundle_identifier="io.whitedot.writer",
-                 info_plist={"LSUIElement": True, "CFBundleDisplayName": "WhiteDot",
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Folio")
+    app = BUNDLE(coll, name="Folio.app", icon=icon, bundle_identifier="io.whitedot.writer",
+                 info_plist={"LSUIElement": True, "CFBundleDisplayName": "Folio",
                              "CFBundleShortVersionString": __version__, "CFBundleVersion": __version__,
                              "LSMinimumSystemVersion": "15.0", "NSHighResolutionCapable": True})
 else:
@@ -30,14 +30,14 @@ else:
         ffi=FixedFileInfo(filevers=version_parts, prodvers=version_parts),
         kids=[
             StringFileInfo([StringTable("040904B0", [
-                StringStruct("FileDescription", "WhiteDot English proofreading editor"),
+                StringStruct("FileDescription", "Folio English proofreading editor"),
                 StringStruct("FileVersion", __version__),
-                StringStruct("ProductName", "WhiteDot"),
+                StringStruct("ProductName", "Folio"),
                 StringStruct("ProductVersion", __version__),
-                StringStruct("OriginalFilename", "WhiteDot.exe"),
+                StringStruct("OriginalFilename", "Folio.exe"),
             ])]),
             VarFileInfo([VarStruct("Translation", [1033, 1200])]),
         ],
     )
-    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="WhiteDot", console=False,
+    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="Folio", console=False,
               strip=False, upx=False, icon=icon, version=version)

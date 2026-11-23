@@ -4,9 +4,10 @@ __pycache__/
 .DS_Store
 .env*
 build/
-dist/
+/dist/*
+!/dist/Folio-windows-x64.exe
 release/
 *.spec
-!WhiteDot.spec
+!Folio.spec
 .pytest_cache/
 .gitignore

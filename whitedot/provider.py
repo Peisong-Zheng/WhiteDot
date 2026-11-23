@@ -213,10 +213,10 @@ class Provider:
             exc.close()
             messages = {
                 400: "Check the model name and its supported settings.",
-                401: "The API key was rejected. Check or replace it in Settings.",
+                401: "The API key was rejected. To change it, open AI settings from the dot’s menu.",
                 402: "Your provider account has insufficient credit.",
                 403: "Access denied. Check the API key permissions and provider region.",
-                404: "The endpoint or model was not found. Check both in Settings.",
+                404: "The endpoint or model was not found. Check both in AI settings.",
                 408: "The provider timed out. Try again.",
                 422: "The model rejected the request settings. Check the model name and options.",
                 429: "Rate or usage limit reached. Check your quota or try again later.",

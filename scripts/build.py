@@ -52,7 +52,7 @@ def build_icon(macos):
             png = images[size]
             chunks.append(tag + struct.pack(">I", len(png) + 8) + png)
         payload = b"".join(chunks)
-        (BUILD / "WhiteDot.icns").write_bytes(b"icns" + struct.pack(">I", len(payload) + 8) + payload)
+        (BUILD / "Folio.icns").write_bytes(b"icns" + struct.pack(">I", len(payload) + 8) + payload)
     else:
         entries, payload = [], bytearray()
         sizes = (16, 32, 64, 128, 256)
@@ -61,7 +61,7 @@ def build_icon(macos):
             offset = 6 + 16 * len(sizes) + len(payload)
             entries.append(struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), offset))
             payload.extend(png)
-        (BUILD / "WhiteDot.ico").write_bytes(struct.pack("<HHH", 0, 1, len(sizes)) + b"".join(entries) + payload)
+        (BUILD / "Folio.ico").write_bytes(struct.pack("<HHH", 0, 1, len(sizes)) + b"".join(entries) + payload)
 
 
 def main():
@@ -71,27 +71,27 @@ def main():
     build_icon(macos)
     build_env = dict(os.environ)
     build_env.setdefault("PYINSTALLER_CONFIG_DIR", str(ROOT / "build" / "cache"))
-    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "WhiteDot.spec"],
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "Folio.spec"],
                    cwd=ROOT, env=build_env, check=True)
     if macos:
-        bundle = DIST / "WhiteDot.app"
+        bundle = DIST / "Folio.app"
         # Finder metadata can be inherited in synced directories and invalidates
         # the bundle signature. Sanitize only the generated app, then seal it.
         subprocess.run(["xattr", "-cr", str(bundle)], check=True)
         subprocess.run(["codesign", "-s", "-", "--force", "--all-architectures",
                         "--timestamp=none", "--deep", str(bundle)], check=True)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
-    binary = DIST / ("WhiteDot.app/Contents/MacOS/WhiteDot" if macos else "WhiteDot.exe")
+    binary = DIST / ("Folio.app/Contents/MacOS/Folio" if macos else "Folio.exe")
     env = {**os.environ, "QT_QPA_PLATFORM": "minimal"}
     subprocess.run([str(binary), "--self-test"], cwd=DIST, env=env, check=True, timeout=120)
     cpu = platform.machine().lower()
     arch = {"amd64": "x64", "x86_64": "x64", "aarch64": "arm64"}.get(cpu, cpu)
     if macos:
-        asset = DIST / f"WhiteDot-macos-{arch}.zip"
+        asset = DIST / f"Folio-macos-{arch}.zip"
         subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noacl", "--keepParent",
-                        str(DIST / "WhiteDot.app"), str(asset)], check=True)
+                        str(DIST / "Folio.app"), str(asset)], check=True)
     else:
-        asset = DIST / f"WhiteDot-windows-{arch}.exe"
+        asset = DIST / f"Folio-windows-{arch}.exe"
         binary.replace(asset)
     print(f"Built and smoke-tested {asset}")
 

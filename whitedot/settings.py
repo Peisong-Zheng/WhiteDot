@@ -10,9 +10,11 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from threading import RLock
+from uuid import uuid4
 
 from .provider import PRESETS, ProviderConfig
 
+# Keep the existing credential namespace and preference path across the rename.
 _SERVICE = "WhiteDot AI"
 
 
@@ -61,6 +63,8 @@ class Settings:
     def __init__(self, path: Path | None = None):
         self._path = path if path is not None else _path()
         self._lock = RLock()
+        self._credential_lock = RLock()
+        self._session_keys: dict[str, str] = {}
         try:
             self._data = json.loads(self._path.read_text(encoding="utf-8"))
             if not isinstance(self._data, dict):
@@ -68,7 +72,7 @@ class Settings:
         except FileNotFoundError:
             self._data = {}
         except (OSError, ValueError, RecursionError):
-            raise StorageError("WhiteDot could not read its settings. Check the file format and permissions.") from None
+            raise StorageError("Folio could not read its settings. Check the file format and permissions.") from None
 
     @property
     def config(self) -> ProviderConfig:
@@ -114,47 +118,82 @@ class Settings:
         with self._lock:
             self._write({**self._data, name: value})
 
-    def get_key(self, config: ProviderConfig | None = None) -> str:
-        with self._lock:
-            target = config or self.config
-            # Avoid an unnecessary keychain prompt on the first run.
-            if _account(target) not in self._accounts():
-                return ""
-            try:
-                return _vault().get_password(_SERVICE, _account(target)) or ""
-            except Exception:
-                raise StorageError("Unlock your system credential store and try again.") from None
+    def has_key(self, config: ProviderConfig | None = None) -> bool:
+        """Report what the user has configured without opening the credential store."""
+        return _account(config or self.config) in self._accounts()
 
-    def save_provider(self, config: ProviderConfig, key: str) -> None:
-        """Call after successful validation. A failed update preserves the active profile."""
-        if not key.strip():
+    def _credential_name(self, account: str) -> str:
+        generations = self.get("credential_generations")
+        generation = generations.get(account) if isinstance(generations, dict) else None
+        # Even a damaged preference must never point one endpoint at another's key.
+        if isinstance(generation, str) and len(generation) == 32 and all(
+                c in "0123456789abcdef" for c in generation):
+            return f"{account}.{generation}"
+        return account  # Existing releases stored this endpoint under its unversioned name.
+
+    def get_key(self, config: ProviderConfig | None = None) -> str:
+        target = config or self.config
+        account = _account(target)
+        with self._credential_lock:
+            if not self.has_key(target):
+                return ""
+            if account not in self._session_keys:
+                try:
+                    key = _vault().get_password(_SERVICE, self._credential_name(account))
+                except Exception:
+                    raise StorageError("Access to the saved key was denied. Unlock your credential store and retry.") from None
+                if not key:
+                    return ""
+                self._session_keys[account] = key
+            return self._session_keys[account]
+
+    def save_provider(self, config: ProviderConfig, key: str | None = None) -> None:
+        """Commit a validated profile. Supply a key only when creating or replacing it."""
+        if key is not None and not key.strip():
             raise StorageError("Enter an API key.")
-        with self._lock:
+        with self._credential_lock, self._lock:
             account = _account(config)
+            known = self.has_key(config)
+            saved = self.get("profiles")
+            profiles = dict(saved) if isinstance(saved, dict) else {}
+            previous_config = _read_config(self.get("provider"))
+            if previous_config:
+                profiles[previous_config.provider] = asdict(previous_config)
+            profiles[config.provider] = asdict(config)
+            data = {**self._data, "provider": asdict(config), "profiles": profiles,
+                    "accounts": sorted(self._accounts() | {account})}
+            if key is None:
+                if not known:
+                    raise StorageError("Enter an API key for this endpoint.")
+                self._write(data)
+                return
+
+            # Keyring's macOS backend deletes an item before it writes the new
+            # value. Stage the replacement separately so no failure loses the
+            # active key or requires reading the original secret for rollback.
+            previous = self._credential_name(account)
+            generation = uuid4().hex
+            credential = f"{account}.{generation}"
+            raw = self.get("credential_generations")
+            generations = dict(raw) if isinstance(raw, dict) else {}
+            generations[account] = generation
+            data["credential_generations"] = generations
             try:
                 vault = _vault()
-                previous = vault.get_password(_SERVICE, account)
-                vault.set_password(_SERVICE, account, key.strip())
+                vault.set_password(_SERVICE, credential, key.strip())
             except Exception:
-                raise StorageError("Allow access to your system credential store to save the API key.") from None
+                raise StorageError("Allow access to your credential store to save the API key.") from None
             try:
-                # Before per-provider profiles, only the active one was saved.
-                # Preserve it the first time an upgrading user switches providers.
-                saved = self.get("profiles")
-                profiles = dict(saved) if isinstance(saved, dict) else {}
-                previous_config = _read_config(self.get("provider"))
-                if previous_config:
-                    profiles[previous_config.provider] = asdict(previous_config)
-                profiles[config.provider] = asdict(config)
-                accounts = sorted(self._accounts() | {account})
-                self._write({**self._data, "provider": asdict(config), "profiles": profiles,
-                             "accounts": accounts})
+                self._write(data)
             except Exception:
                 try:
-                    if previous is not None:
-                        vault.set_password(_SERVICE, account, previous)
-                    else:
-                        vault.delete_password(_SERVICE, account)
+                    vault.delete_password(_SERVICE, credential)
                 except Exception:
-                    raise StorageError("Settings could not be saved. The stored key may have changed. Validate and save again.") from None
+                    pass  # The unreferenced item is still protected by the OS.
                 raise
+            self._session_keys[account] = key.strip()
+            if known:
+                try:
+                    vault.delete_password(_SERVICE, previous)
+                except Exception:
+                    pass  # The validated replacement is already active.

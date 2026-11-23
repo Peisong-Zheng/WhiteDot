@@ -204,6 +204,27 @@ class SettingsTests(unittest.TestCase):
                 self.settings.save_provider(PRESETS["OpenAI"], TOKEN)
         self.assertEqual(self.settings.get_key(), "previous")
 
+    def test_replace_without_reading_old_key_and_preserve_legacy_item_on_failed_save(self):
+        import hashlib
+        config = PRESETS["DeepSeek"]
+        old_account = hashlib.sha256((config.provider + "\n" + config.base_url.rstrip("/")).encode()).hexdigest()
+        self.secrets[old_account] = "old-key"
+        self.settings.set("accounts", [old_account])
+        self.assertTrue(self.settings.has_key(config))
+        with patch.object(self.settings, "_write", side_effect=StorageError("disk is full")):
+            with self.assertRaises(StorageError):
+                self.settings.save_provider(config, "replacement")
+        self.assertEqual(self.secrets, {old_account: "old-key"})
+        self.settings.save_provider(config, "replacement")
+        self.vault.get_password.assert_not_called()
+        self.assertEqual(self.settings.get_key(config), "replacement")
+        self.vault.get_password.assert_not_called()
+        self.assertNotIn(old_account, self.secrets)
+        restarted = Settings(self.path)
+        self.assertEqual(restarted.get_key(config), "replacement")
+        self.assertEqual(restarted.get_key(config), "replacement")
+        self.vault.get_password.assert_called_once()
+
     def test_invalid_pref_file(self):
         self.path.parent.mkdir()
         self.path.write_text("invalid")

@@ -4,12 +4,14 @@ import plistlib
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from xml.parsers.expat import ExpatError
 
 LABEL = "io.whitedot.writer"
 PLIST = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+WINDOWS_ENTRY = "Folio Proofreader"
+LEGACY_ENTRY = "WhiteDot"
 
 
 def launch_command():
@@ -30,7 +32,7 @@ def enabled():
         import winreg
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-                command, kind = winreg.QueryValueEx(key, "WhiteDot")
+                command, kind = winreg.QueryValueEx(key, WINDOWS_ENTRY)
                 return kind == winreg.REG_SZ and command == subprocess.list2cmdline(launch_command())
         except FileNotFoundError:
             return False
@@ -57,12 +59,43 @@ def set_enabled(on):
         import winreg
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
             if on:
-                winreg.SetValueEx(key, "WhiteDot", 0, winreg.REG_SZ,
+                winreg.SetValueEx(key, WINDOWS_ENTRY, 0, winreg.REG_SZ,
                                   subprocess.list2cmdline(launch_command()))
-            else:
+            obsolete = (LEGACY_ENTRY,) if on else (WINDOWS_ENTRY, LEGACY_ENTRY)
+            for name in obsolete:
                 try:
-                    winreg.DeleteValue(key, "WhiteDot")
+                    winreg.DeleteValue(key, name)
                 except FileNotFoundError:
                     pass
     else:
         raise OSError("Launch at login is unavailable on this system.")
+
+
+def upgrade_login_item():
+    """Carry an enabled login item across the rename when upgrading in place."""
+    if not getattr(sys, "frozen", False):
+        return
+    if sys.platform == "darwin":
+        exe = Path(sys.executable)
+        if exe.parts[-3:] != ("Contents", "MacOS", "Folio") or exe.parents[2].name != "Folio.app":
+            return
+        old = exe.parents[2].with_name("WhiteDot.app") / "Contents/MacOS/WhiteDot"
+        try:
+            item = plistlib.loads(PLIST.read_bytes())
+        except (FileNotFoundError, plistlib.InvalidFileException, ExpatError, ValueError):
+            return
+        if (isinstance(item, dict) and item.get("Label") == LABEL and item.get("RunAtLoad") is True
+                and item.get("ProgramArguments") == [str(old)]):
+            set_enabled(True)
+    elif sys.platform == "win32":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+                old, kind = winreg.QueryValueEx(key, LEGACY_ENTRY)
+        except FileNotFoundError:
+            return
+        directory = PureWindowsPath(sys.executable).parent
+        legacy_commands = {subprocess.list2cmdline([str(directory / name)]).casefold()
+                           for name in ("WhiteDot.exe", "WhiteDot-windows-x64.exe")}
+        if kind == winreg.REG_SZ and old.casefold() in legacy_commands:
+            set_enabled(True)

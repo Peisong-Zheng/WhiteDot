@@ -1,7 +1,7 @@
 import unittest
 
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from whitedot.types import Issue
 from whitedot.windows_ui import Panel, utf16
@@ -10,7 +10,7 @@ from whitedot.windows_ui import Panel, utf16
 class EditorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication(["WhiteDot tests", "-platform", "minimal"])
+        cls.app = QApplication.instance() or QApplication(["Folio tests", "-platform", "minimal"])
 
     def setUp(self):
         self.panel = Panel()
@@ -34,10 +34,25 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(panel.result.extraSelections(), [])
 
     def test_word_count_with_diacritics_contractions_and_hyphens(self):
+        self.assertFalse(self.panel.count.isVisible())
         self.panel.editor.setPlainText("naïve")
         self.assertEqual(self.panel.count.text(), "1 word")
+        self.assertTrue(self.panel.count.isVisible())
         self.panel.editor.setPlainText("We’re co-authors of 2 résumés.")
         self.assertEqual(self.panel.count.text(), "5 words")
+        self.panel.editor.clear()
+        self.assertFalse(self.panel.count.isVisible())
+
+    def test_first_draft_has_only_the_writing_controls(self):
+        panel = self.panel
+        panel.set_context_action("Connect AI")
+        labels = {item.text() for item in panel.findChildren(QLabel) if item.isVisible()}
+        self.assertEqual(labels, {"Draft"})
+        buttons = {item.accessibleName() or item.text()
+                   for item in panel.findChildren(QPushButton) if item.isVisible()}
+        self.assertEqual(buttons, {"Hide editor (Esc)", "Connect AI", "Copy draft", "Rewrite"})
+        self.assertFalse(panel.original_copy.isEnabled())
+        self.assertFalse(panel.rewrite.isEnabled())
 
     def test_last_letter_is_clickable_but_empty_margin_is_not(self):
         editor = self.panel.editor

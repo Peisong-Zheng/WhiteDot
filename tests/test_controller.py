@@ -9,8 +9,8 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from whitedot.app import Controller
-from whitedot.settings import Settings
+from whitedot.app import Controller, SavedProvider
+from whitedot.settings import Settings, StorageError
 from whitedot.types import Issue
 
 
@@ -50,7 +50,7 @@ class FixtureModel:
 class ControllerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication(["WhiteDot tests", "-platform", "minimal"])
+        cls.app = QApplication.instance() or QApplication(["Folio tests", "-platform", "minimal"])
         cls.app.setQuitOnLastWindowClosed(False)
 
     def setUp(self):
@@ -171,17 +171,17 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(p.result.toPlainText(), "")
         self.assertTrue(p.result_group.isHidden())
         self.assertIn("secret", p.status.text().lower())
-        self.assertEqual(self.model.checks + self.model.rewrites, ["Check teh grammar."] * 2)
+        self.assertEqual(self.model.checks + self.model.rewrites, [])
 
     def test_config_error_and_cancel_return_to_existing_draft(self):
         c, p = self.ctrl, self.panel
         c.open_dot()
         p.editor.setPlainText("A draft.")
-        p.settings_requested.emit()
+        next(a for a in c.menu.actions() if a.text() == "AI settings…").trigger()
         self.assertFalse(p.isVisible())
         dlg = c.dialog
         dlg.key.setText("fixture")
-        dlg.url.textEdited.emit("https://fixture.example/v1")
+        dlg.url.setText("https://fixture.example/v1")
         self.assertEqual(dlg.key.text(), "")
         dlg.key.setText("fixture")
         with patch("whitedot.app.Provider"), patch.object(self.prefs, "save_provider") as save:
@@ -211,7 +211,7 @@ class ControllerTests(unittest.TestCase):
         self.jobs.finish()
         self.assertEqual(c.issues, [])
         self.jobs.finish()
-        self.assertEqual(self.model.checks, ["First teh draft.", "Final teh draft."])
+        self.assertEqual(self.model.checks, ["Final teh draft."])
         self.assertEqual(len(c.issues), 1)
 
     def test_dot_position_roundtrip_and_disconnected_screen(self):
@@ -352,12 +352,97 @@ class ControllerTests(unittest.TestCase):
     def test_saved_custom_profile_reappears_when_switching_providers(self):
         from whitedot.provider import ProviderConfig
         custom = ProviderConfig("Custom", "https://custom.example/v1", "writing-model")
-        self.ctrl.configure()
-        dialog = self.ctrl.dialog
-        with patch.object(self.prefs, "config_for", return_value=custom) as saved, \
-                patch.object(self.prefs, "get_key", return_value="fixture-key") as key:
+        with patch("whitedot.settings._vault"):
+            self.prefs.save_provider(custom, "fixture-key")
+        with patch.object(self.prefs, "get_key", side_effect=AssertionError("unexpected vault access")), \
+                patch("whitedot.settings._vault", side_effect=AssertionError("unexpected vault access")):
+            self.ctrl.configure()
+            dialog = self.ctrl.dialog
+            self.assertEqual(dialog.key.text(), "")
+            self.assertTrue(dialog.key.isHidden())
+            self.assertTrue(dialog.saved_key.isVisible())
+            self.assertFalse(dialog.save.isEnabled())
+            dialog.provider.setCurrentText("OpenAI")
+            self.assertTrue(dialog.key.isVisible())
             dialog.provider.setCurrentText("Custom")
-            saved.assert_called_once_with("Custom")
-            key.assert_called_once_with(custom)
-        self.assertEqual((dialog.url.text(), dialog.model.text()), (custom.base_url, custom.model))
-        self.assertTrue(dialog.save.isEnabled())
+            self.assertEqual((dialog.url.text(), dialog.model.text()), (custom.base_url, custom.model))
+            dialog.change_key.click()
+            self.assertTrue(dialog.key.isVisible())
+            self.assertEqual(dialog.key.text(), "")
+            dialog.key.setText("replacement")
+            dialog.change_key.click()
+            self.assertEqual(dialog.key.text(), "")
+            self.assertFalse(dialog.save.isEnabled())
+            dialog.reject()
+
+    def test_edit_model_reuses_key_only_on_deliberate_save(self):
+        from whitedot.provider import PRESETS
+        with patch("whitedot.settings._vault"):
+            self.prefs.save_provider(PRESETS["DeepSeek"], "fixture-key")
+        with patch.object(self.prefs, "get_key", return_value="fixture-key") as read, \
+                patch("whitedot.settings._vault") as vault, patch("whitedot.app.Provider") as provider:
+            self.ctrl.configure()
+            dialog = self.ctrl.dialog
+            dialog.model.setText("other-model")
+            self.assertTrue(dialog.save.isEnabled())
+            read.assert_not_called()
+            dialog.save.click()
+            self.jobs.finish()
+            read.assert_called_once()
+            provider.return_value.validate.assert_called_once()
+            vault.assert_not_called()
+            self.assertEqual(self.prefs.config.model, "other-model")
+
+    def test_only_real_request_loads_key_and_denial_needs_explicit_retry(self):
+        from whitedot.provider import PRESETS
+        with patch("whitedot.settings._vault"):
+            self.prefs.save_provider(PRESETS["DeepSeek"], "fixture-key")
+        c, p = self.ctrl, self.panel
+        # Simulate a new process with a protected item left by an older release.
+        c.prefs = Settings(self.prefs._path)
+        c.client = SavedProvider(c.prefs)
+        with patch.object(c.prefs, "get_key", side_effect=[StorageError("Access denied."), "fixture-key"]) as read, \
+                patch("whitedot.app.Provider", return_value=self.model):
+            c.show_editor()
+            c.configure()
+            c.dialog.reject()
+            self.assertFalse(c.delay.isActive())
+            read.assert_not_called()
+            p.editor.setPlainText("Please check teh word.")
+            self.expire_debounce()
+            work, done = self.jobs.pending.pop()
+            with self.assertRaises(StorageError) as failed:
+                work()
+            done(None, str(failed.exception))
+            self.assertEqual(p.context_action.text(), "Retry access")
+            p.editor.setPlainText("Retry teh draft.")
+            self.assertFalse(c.delay.isActive())
+            self.assertFalse(p.rewrite.isEnabled())
+            c.close_panel()
+            c.show_editor()
+            self.assertFalse(c.delay.isActive())
+            self.assertEqual(read.call_count, 1)
+            p.context_action.click()
+            self.jobs.finish()
+            self.assertEqual(read.call_count, 2)
+            p.rewrite.click()
+            self.jobs.finish()
+            self.assertEqual(read.call_count, 2)
+            self.assertEqual(p.result.toPlainText(), "Retry the draft.")
+
+    def test_draft_hidden_during_credential_authorization_is_never_sent(self):
+        c, p = self.ctrl, self.panel
+        c.client = SavedProvider(self.prefs)
+        c.show_editor()
+        p.editor.setPlainText("A private draft.")
+        self.expire_debounce()
+
+        def allow_after_closing(_config):
+            c.close_panel()
+            return "fixture-key"
+
+        with patch.object(self.prefs, "get_key", side_effect=allow_after_closing), \
+                patch("whitedot.app.Provider", return_value=self.model):
+            self.jobs.finish()
+        self.assertFalse(p.isVisible())
+        self.assertEqual(self.model.checks, [])

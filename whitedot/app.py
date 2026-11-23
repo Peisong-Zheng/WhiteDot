@@ -5,7 +5,7 @@ import threading
 from PySide6.QtCore import QObject, QPoint, QTimer, Qt, Signal
 from PySide6.QtGui import QCursor, QTextCursor
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QSystemTrayIcon, QVBoxLayout)
+                               QLineEdit, QMenu, QMessageBox, QSystemTrayIcon, QVBoxLayout, QWidget)
 
 from . import startup
 from .privacy import input_status
@@ -41,10 +41,36 @@ class Jobs(QObject):
             except RuntimeError:
                 pass  # Application already closed.
 
-        threading.Thread(target=work, daemon=True, name="WhiteDot request").start()
+        threading.Thread(target=work, daemon=True, name="Folio request").start()
 
     def finish(self, job, value, error):
         self.callbacks.pop(job)(value, error)
+
+
+class SavedProvider:
+    """Open the OS credential store only when a draft actually needs the model."""
+    def __init__(self, prefs):
+        self.prefs = prefs
+        self.config = prefs.config
+        self._client = None
+        self._lock = threading.Lock()
+        self.access_error = ""
+
+    def open(self):
+        # Proofreading and rewriting may begin together for the same draft.
+        with self._lock:
+            if self.access_error:
+                raise StorageError(self.access_error)
+            if self._client is None:
+                try:
+                    key = self.prefs.get_key(self.config)
+                    if not key:
+                        raise StorageError("The saved key is missing. Open AI settings from the tray menu to replace it.")
+                    self._client = Provider(self.config, key)
+                except (StorageError, ProviderError) as exc:
+                    self.access_error = str(exc)
+                    raise
+            return self._client
 
 
 class Configuration(QDialog):
@@ -53,7 +79,7 @@ class Configuration(QDialog):
 
     def __init__(self, prefs, jobs):
         super().__init__(None, Qt.Dialog | Qt.WindowStaysOnTopHint)
-        self.setWindowTitle("AI settings — WhiteDot")
+        self.setWindowTitle("AI settings — Folio")
         self.setStyleSheet(STYLE)
         self.setObjectName("serviceDialog")
         self.prefs = prefs
@@ -77,11 +103,20 @@ class Configuration(QDialog):
         self.model = QLineEdit()
         self.key = QLineEdit()
         self.key.setEchoMode(QLineEdit.Password)
-        self.key.setPlaceholderText("Enter your API key")
+        self.saved_key = QLabel("Saved")
+        self.change_key = button("Change key", self.toggle_key_entry)
+        self.change_key.setAutoDefault(False)
+        self.key_row = QWidget()
+        key_box = QHBoxLayout(self.key_row)
+        key_box.setContentsMargins(0, 0, 0, 0)
+        key_box.addWidget(self.saved_key, 1)
+        key_box.addWidget(self.key, 1)
+        key_box.addWidget(self.change_key)
+        self.key.setAccessibleName("API key")
         self.url.setPlaceholderText("https://your-provider.com/v1")
         self.model.setPlaceholderText("Model ID from your provider")
         for title, control in [("Provider", self.provider), ("Base URL", self.url),
-                               ("Model", self.model), ("API key", self.key)]:
+                               ("Model", self.model), ("API key", self.key_row)]:
             control.setAccessibleName(title)
             form.addRow(title, control)
         box.addLayout(form)
@@ -103,63 +138,91 @@ class Configuration(QDialog):
         config = prefs.config
         self.provider.setCurrentText(config.provider)
         self.provider.currentTextChanged.connect(lambda name: self.fill(prefs.config_for(name)))
-        self.url.textEdited.connect(lambda _: self.key.clear())
-        for edit in (self.url, self.model, self.key):
+        self.url.textChanged.connect(self.reset_key_entry)
+        for edit in (self.model, self.key):
             edit.textChanged.connect(self.update_save)
         self.fill(config)
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(458, screen.width()), self.sizeHint().height())
-        (self.url if not self.url.text() else self.key).setFocus(Qt.OtherFocusReason)
+        focus = self.change_key if self.stored_key else (self.url if not self.url.text() else self.key)
+        focus.setFocus(Qt.OtherFocusReason)
+
+    def current_config(self):
+        return ProviderConfig(self.provider.currentText(), self.url.text().strip(), self.model.text().strip())
 
     def update_save(self):
-        self.save.setEnabled(not self.validating and all(
-            edit.text().strip() for edit in (self.url, self.model, self.key)))
+        config = self.current_config()
+        changed = self.entering_key or config != self.prefs.config
+        credential_ready = bool(self.key.text().strip()) if self.entering_key else self.stored_key
+        self.save.setEnabled(bool(not self.validating and changed and credential_ready
+                                  and config.base_url and config.model))
+
+    def reset_key_entry(self):
+        # Only consult the endpoint index in preferences, never the vault here.
+        self.stored_key = self.prefs.has_key(self.current_config())
+        self.set_key_entry(not self.stored_key)
+
+    def toggle_key_entry(self):
+        self.set_key_entry(not self.entering_key)
+        (self.key if self.entering_key else self.change_key).setFocus(Qt.OtherFocusReason)
+
+    def set_key_entry(self, entering):
+        self.entering_key = entering
+        self.key.clear()
+        self.key.setVisible(entering)
+        self.saved_key.setVisible(not entering)
+        self.change_key.setVisible(self.stored_key)
+        self.change_key.setText("Keep saved key" if entering else "Change key")
+        self.key.setPlaceholderText("Enter a new API key" if self.stored_key else "Enter your API key")
+        self.update_save()
 
     def fill(self, config):
         self.message.setText(self.DISCLOSURE)
         self.url.setText(config.base_url)
+        self.reset_key_entry()
         self.model.setText(config.model)
-        self.key.clear()
-        try:
-            self.key.setText(self.prefs.get_key(config))
-        except StorageError as exc:
-            self.message.setText(str(exc))
 
     def submit(self):
         if not self.save.isEnabled():
             return
-        config = ProviderConfig(self.provider.currentText(), self.url.text().strip(), self.model.text().strip())
-        key = self.key.text().strip()
-        try:
-            client = Provider(config, key)
-        except ProviderError as exc:
-            self.message.setText(str(exc))
-            return
+        config = self.current_config()
+        new_key = self.key.text().strip() if self.entering_key else None
         self.generation += 1
         version = self.generation
         self.validating = True
-        for w in (self.provider, self.url, self.model, self.key, self.save):
-            w.setEnabled(False)
+        fields = (self.provider, self.url, self.model, self.key_row)
+        for field in fields:
+            field.setEnabled(False)
+        self.update_save()
         self.message.setText("Verifying your key and model with a short sample…")
 
-        def complete(_, error):
+        def verify():
+            # A stored key is used only after the user commits a changed profile.
+            key = new_key if new_key is not None else self.prefs.get_key(config)
+            if not key:
+                raise StorageError("The saved key is missing. Choose Change key to enter a new one.")
+            client = Provider(config, key)
+            client.validate()
+            return client
+
+        def complete(client, error):
             if version != self.generation:
                 return
             if not error:
                 try:
-                    self.prefs.save_provider(config, key)
+                    self.prefs.save_provider(config, new_key)
                 except StorageError as exc:
                     error = str(exc)
             if error:
                 self.validating = False
                 self.message.setText(error)
-                for w in (self.provider, self.url, self.model, self.key):
-                    w.setEnabled(True)
+                for field in fields:
+                    field.setEnabled(True)
                 self.update_save()
             else:
                 self.saved.emit(client)
                 self.accept()
-        self.jobs.run(client.validate, complete)
+        self.jobs.run(verify, complete)
 
     def done(self, result):
         self.generation += 1
@@ -174,7 +237,8 @@ class Controller(QObject):
         self.prefs = prefs
         self.jobs = jobs or Jobs()
         self.client = initial_client
-        self.load_saved_client = not testing and initial_client is None
+        if self.client is None and prefs.has_key():
+            self.client = SavedProvider(prefs)
         self.version = 0
         self.checked = False
         self.check_inflight = None
@@ -200,7 +264,6 @@ class Controller(QObject):
         self.panel.editor.textChanged.connect(self.edited)
         self.panel.editor.issue_click.connect(self.show_issue)
         self.panel.closing.connect(self.close_panel)
-        self.panel.settings_requested.connect(self.configure)
         self.panel.rewrite.clicked.connect(self.rewrite)
         self.panel.action_requested.connect(self.context_action)
         self.panel.review_requested.connect(self.review_issue)
@@ -210,7 +273,7 @@ class Controller(QObject):
         self.icon = icon()
         app.setWindowIcon(self.icon)
         self.tray = QSystemTrayIcon(self.icon, self)
-        self.tray.setToolTip("WhiteDot — English proofreader")
+        self.tray.setToolTip("Folio — English proofreader")
         self.menu = QMenu()
         self.menu.addAction("Open editor", self.show_editor)
         self.menu.addAction("AI settings…", self.configure)
@@ -218,7 +281,7 @@ class Controller(QObject):
         self.start_action.setCheckable(True)
         self.start_action.triggered.connect(self.toggle_startup)
         self.menu.addSeparator()
-        self.menu.addAction("Quit WhiteDot", self.request_quit)
+        self.menu.addAction("Quit Folio", self.request_quit)
         self.menu.aboutToShow.connect(self.prepare_menu)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self.tray_click)
@@ -267,9 +330,9 @@ class Controller(QObject):
         self.quit_prompt = prompt
         prompt.setWindowFlag(Qt.WindowStaysOnTopHint)
         prompt.setWindowModality(Qt.ApplicationModal)
-        prompt.setWindowTitle("Quit WhiteDot")
+        prompt.setWindowTitle("Quit Folio")
         prompt.setText("Keep a copy before quitting?")
-        prompt.setInformativeText("Your draft and rewrite are cleared when WhiteDot quits.")
+        prompt.setInformativeText("Your draft and rewrite are cleared when Folio quits.")
         copy = prompt.addButton("Copy rewrite and quit" if result else "Copy draft and quit",
                                 QMessageBox.AcceptRole)
         discard = prompt.addButton("Quit without copying", QMessageBox.DestructiveRole)
@@ -330,7 +393,7 @@ class Controller(QObject):
         if self.panel.isVisible():
             self.set_status(message)
         elif self.tray.isVisible():
-            self.tray.showMessage("WhiteDot", message, QSystemTrayIcon.Information, 4500)
+            self.tray.showMessage("Folio", message, QSystemTrayIcon.Information, 4500)
 
     def configure(self):
         if self.dialog:
@@ -358,7 +421,6 @@ class Controller(QObject):
 
     def use_client(self, client):
         self.client = client
-        self.load_saved_client = False
         self.edited()
         if not self.return_to_panel:
             self.notify("AI service connected.")
@@ -376,16 +438,6 @@ class Controller(QObject):
         raise_surface(self.panel)
         self.panel.activateWindow()
         self.panel.editor.setFocus(Qt.OtherFocusReason)
-        if self.load_saved_client:
-            self.load_saved_client = False
-            try:
-                key = self.prefs.get_key()
-                if key:
-                    self.client = Provider(self.prefs.config, key)
-            except (StorageError, ProviderError) as exc:
-                self.load_saved_client = True
-                self.set_status(str(exc), "AI settings", self.configure)
-                return
         self.schedule()
 
     def close_panel(self):
@@ -461,23 +513,42 @@ class Controller(QObject):
         if self.context_handler:
             self.context_handler()
 
+    def access_error(self):
+        return self.client.access_error if isinstance(self.client, SavedProvider) else ""
+
+    def retry_access(self):
+        if not self.access_error():
+            return
+        # Reuse the saved profile. Only a deliberate click retries a denied read.
+        retry_rewrite = bool(self.rewrite_error)
+        self.version += 1
+        self.client = SavedProvider(self.prefs)
+        self.check_error = self.rewrite_error = ""
+        self.rewriting = False
+        self.run_check()
+        if retry_rewrite:
+            self.rewrite()
+
     def schedule(self):
         text = self.panel.editor.toPlainText()
         eligible = bool(self.client and not input_status(text, MAX_TEXT))
-        if eligible and not self.checked and not self.check_error:
+        if eligible and not self.checked and not self.check_error and not self.access_error():
             self.delay.start()
         self.refresh_status()
 
     def refresh_status(self):
         text = self.panel.editor.toPlainText()
         problem = input_status(text, MAX_TEXT) if text else ""
-        self.panel.rewrite.setEnabled(bool(self.client and text and not problem and not self.rewriting))
+        can_rewrite = self.client and text and not problem and not self.rewriting and not self.access_error()
+        self.panel.rewrite.setEnabled(bool(can_rewrite))
         if not self.client:
             self.set_status("", "Connect AI", self.configure)
         elif not text:
             self.set_status("Checks as you type")
         elif problem:
             self.set_status(problem)
+        elif self.access_error():
+            self.set_status(self.access_error(), "Retry access", self.retry_access)
         elif self.rewriting:
             self.set_status("Rewriting…")
         elif self.rewrite_error:
@@ -496,9 +567,23 @@ class Controller(QObject):
         else:
             self.set_status("Waiting to check…")
 
+    def run_model(self, operation, text, complete):
+        version, client = self.version, self.client
+
+        def work():
+            if version != self.version:
+                return None
+            provider = client.open() if isinstance(client, SavedProvider) else client
+            # The user may have edited or hidden the draft while macOS asked for access.
+            if version != self.version:
+                return None
+            return getattr(provider, operation)(text)
+
+        self.jobs.run(work, complete)
+
     def run_check(self):
         text = self.panel.editor.toPlainText()
-        if not self.panel.isVisible() or not self.client or input_status(text, MAX_TEXT):
+        if not self.panel.isVisible() or not self.client or self.access_error() or input_status(text, MAX_TEXT):
             return
         if self.check_inflight is not None:
             self.check_queued = self.check_inflight != self.version
@@ -507,7 +592,7 @@ class Controller(QObject):
         self.check_queued = False
         self.check_error = ""
         self.refresh_status()
-        version, client = self.version, self.client
+        version = self.version
 
         def complete(issues, error):
             self.check_inflight = None
@@ -516,12 +601,13 @@ class Controller(QObject):
                 self.check_error = error
                 self.issues = issues or []
                 self.panel.editor.mark(self.issues)
+            if self.panel.isVisible():
                 self.refresh_status()
             if self.check_queued:
                 self.check_queued = False
                 self.run_check()
 
-        self.jobs.run(lambda: client.check(text), complete)
+        self.run_model("check", text, complete)
 
     def review_issue(self):
         if not self.issues or not self.panel.isVisible():
@@ -586,10 +672,10 @@ class Controller(QObject):
 
     def rewrite(self):
         text = self.panel.editor.toPlainText()
-        if (not self.panel.isVisible() or self.rewriting or not self.client
+        if (not self.panel.isVisible() or self.rewriting or not self.client or self.access_error()
                 or input_status(text, MAX_TEXT)):
             return
-        version, client = self.version, self.client
+        version = self.version
         self.rewriting = True
         self.rewrite_error = ""
         self.panel.result_group.show()
@@ -598,6 +684,8 @@ class Controller(QObject):
 
         def complete(result, error):
             if version != self.version or not self.panel.isVisible():
+                if self.access_error() and self.panel.isVisible():
+                    self.refresh_status()
                 return
             self.rewriting = False
             self.rewrite_error = error
@@ -610,4 +698,4 @@ class Controller(QObject):
                 self.panel.result.setPlainText(result)
             self.refresh_status()
 
-        self.jobs.run(lambda: client.rewrite(text), complete)
+        self.run_model("rewrite", text, complete)
