@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Optional release tag, e.g. v0.1.0 (leave empty for build artifacts)'
+        description: 'Optional release tag, e.g. v0.2.0 (leave empty for build artifacts)'
         required: false
         type: string
 
@@ -35,7 +35,7 @@ jobs:
           fi
           if [[ -n "$tag" ]]; then
             if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){0,2}([-+][A-Za-z0-9.-]+)?$ ]] || ! git check-ref-format "refs/tags/$tag"; then
-              echo "Use a version tag such as v0.1.0 or v0.1.0-beta.1." >&2
+              echo "Use a version tag such as v0.2.0 or v0.2.0-beta.1." >&2
               exit 1
             fi
           fi
@@ -49,9 +49,7 @@ jobs:
         include:
           - os: macos-15
             platform: macos
-            asset: |
-              dist/WhiteDot-macos-*.zip
-              dist/WhiteDot-browser-extension.zip
+            asset: dist/WhiteDot-macos-*.zip
           - os: windows-2022
             platform: windows
             asset: dist/WhiteDot-windows-*.exe
@@ -70,9 +68,6 @@ jobs:
         run: python -m unittest discover -s tests -v
         env:
           QT_QPA_PLATFORM: minimal
-      - name: Exercise browser editor fields in Chrome
-        if: runner.os == 'macOS'
-        run: python tests/browser/run_dom.py
       - name: Build and smoke-test packaged application
         run: python scripts/build.py
       - uses: actions/upload-artifact@v4

@@ -1,5 +1,4 @@
 """WhiteDot desktop entry point."""
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -12,45 +11,31 @@ from whitedot.settings import Settings, StorageError
 from whitedot.types import Issue
 
 
-def make_adapter():
-    if sys.platform == "darwin":
-        from whitedot.platforms.macos import MacAdapter
-        return MacAdapter()
-    if sys.platform == "win32":
-        from whitedot.platforms.windows import WinAdapter
-        return WinAdapter()
-    raise RuntimeError("WhiteDot 需要 macOS 或 Windows。")
-
-
 def smoke(app):
-    """Exercise the installed native imports and both editor states using only fixtures."""
-    adapter = make_adapter()
-    adapter.permission()
+    """Exercise the packaged manual editor with a fixture and no network requests."""
     from whitedot.provider import PRESETS, Provider
     from whitedot.settings import _vault
-    _vault()  # Check bundled keyring backend imports without looking up a credential.
+    _vault()  # Verify that the bundled system keyring imports without reading a credential.
     Provider(PRESETS["DeepSeek"], "offline-placeholder")
-    class EmptyFocus:
-        def capture(self):
-            return None
-        def permission(self, prompt=False):
-            return True
 
     with tempfile.TemporaryDirectory() as tmp:
-        ctrl = Controller(app, Settings(Path(tmp) / "prefs.json"), EmptyFocus(), testing=True)
-        ctrl.open_dot()
-        assert ctrl.panel is ctrl.manual and not ctrl.manual.original_copy.isEnabled()
-        ctrl.manual.editor.setPlainText("😀 teh")
+        ctrl = Controller(app, Settings(Path(tmp) / "prefs.json"), testing=True)
+        ctrl.dot.clicked.emit()
+        panel = ctrl.panel
+        assert panel.isVisible() and not panel.original_copy.isEnabled()
+        panel.editor.setPlainText("😀 teh")
         issue = Issue(2, 5, "teh", ("the",), "拼写错误")
         ctrl.issues = [issue]
-        ctrl.manual.editor.mark(ctrl.issues)
-        marks = ctrl.manual.editor.extraSelections()
-        assert marks[0].cursor.selectedText() == "teh"
+        panel.editor.mark(ctrl.issues)
+        selections = panel.editor.extraSelections()
+        assert selections[0].cursor.selectedText() == issue.original
         ctrl.apply(issue, "the", ctrl.version)
-        assert ctrl.manual.editor.toPlainText() == "😀 the"
-        assert ctrl.manual.original_copy.isEnabled()
-        ctrl.manual.result.setPlainText("Fixture.")
-        assert ctrl.manual.result_copy.isEnabled()
+        assert panel.editor.toPlainText() == "😀 the"
+        assert panel.original_copy.isEnabled()
+        ctrl.dot.clicked.emit()
+        assert not panel.isVisible()
+        ctrl.dot.clicked.emit()
+        assert panel.editor.toPlainText() == "😀 the"
         ctrl.close_panel()
         ctrl.dot.hide()
         app.processEvents()
@@ -71,7 +56,7 @@ def main():
         return 0
     try:
         prefs = Settings()
-        controller = Controller(app, prefs, make_adapter())
+        controller = Controller(app, prefs)
     except (StorageError, RuntimeError) as exc:
         QMessageBox.critical(None, "WhiteDot", str(exc))
         return 1

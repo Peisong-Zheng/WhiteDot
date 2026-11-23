@@ -1,22 +1,21 @@
-# Windows 实机调试与发布
+# Windows 便携版与开发交接
 
-## 使用便携版
+## 运行与升级
 
-在仓库的 **Releases** 页面下载 `WhiteDot-windows-x64.exe`，保存到一个长期保留的目录，双击即可运行。右侧偏下会出现白点，系统托盘的折叠菜单中可以找到 WhiteDot。右键托盘图标可设置模型服务和登录启动。更改 EXE 存放位置后，重新切换一次登录启动开关，让注册表记录新路径。
+从当前版本的 GitHub Release 下载 `WhiteDot-windows-x64.exe`，放入固定文件夹并双击。运行时会在任务栏通知区域显示图标，屏幕右侧会出现可以拖动的白点。打包程序携带 Python 和 Qt，首次启动可能需要几秒。
 
-首次使用在设置中选择提供商、填写模型和自己的 API Key，再进行验证。验证会向选定的 API 端点发起一次小请求。Windows 凭据管理器保存密钥，`%APPDATA%\WhiteDot\settings.json` 保存普通设置。进行屏幕共享或向 AI 描述故障时，只提供错误类型、应用版本及合成样例。
+升级旧版时，先从托盘退出正在运行的 WhiteDot，再替换原位置的 EXE。桌面程序沿用当前 Windows 账户的模型配置、凭据和白点位置。若曾手动加载旧版 WhiteDot 浏览器扩展，可在浏览器的扩展管理页面移除。已启用登录启动且调整过 EXE 位置时，在托盘中关闭再打开该选项，以更新启动路径。
 
-Windows 包由 PyInstaller 单文件模式生成，双击后会先把 Qt 和 Python 运行时展开到临时目录。首次启动可能慢几秒。当前工作流生成未进行 Authenticode 签名的 EXE，企业设备的应用控制策略可能会阻止运行。可用 PowerShell 的 `Get-FileHash .\WhiteDot-windows-x64.exe` 核对 Release 的 `SHA256SUMS.txt`。
+1. 右键白点或托盘图标，打开 AI 服务设置。选择服务商、地址和模型，填入自己的 API Key 并验证。验证将向所选服务提交一个固定英文样例。
+2. 点击白点打开编辑器，输入或粘贴英文。例如 `She go to teh library every day.`。停顿后会触发校对，点击有红色下划线的词查看并应用建议。
+3. 需要整段修改时使用重写操作，核对结果后复制。收起后再打开可继续编辑这一轮运行的草稿。
+4. 完成后可以收起白点面板。桌面程序只在自己的面板内接收输入，其他应用可继续使用自己的校对工具。
 
-### Chrome 与 Edge 的可选扩展
+API Key 保存在 Windows 凭据管理器中。普通偏好位于 `%APPDATA%\WhiteDot\settings.json`。Release 提供 SHA-256 校验表，可在 PowerShell 中运行 `Get-FileHash .\WhiteDot-windows-x64.exe` 进行比对。当前构建流程生成未进行 Authenticode 签名的 EXE。
 
-当浏览器输入框无法显示准确的红线时，可从同一个 Release 下载 `WhiteDot-browser-extension.zip` 并解压到长期保留的文件夹。在 `chrome://extensions` 或 `edge://extensions` 打开开发者模式，点击“加载已解压的扩展”，选择直接含有 `manifest.json` 的文件夹。通过 WhiteDot 托盘菜单启用浏览器连接，然后将配对码填入扩展弹窗。配对码只供桌面程序和本机扩展连接；模型 API Key 始终在桌面设置中填写。扩展依赖正在运行的 WhiteDot。
+## 从源码运行
 
-## 用 VS Code 打开源码
-
-1. 通过 VS Code 的 **Git: Clone** 克隆公开仓库。打开包含 `main.py`、`WhiteDot.spec` 和 `.github` 的目录。
-2. 安装 Windows x64 的 Python 3.11。以下命令可直接交给 VS Code 中的 AI 代理执行，使用虚拟环境的解释器路径可以避免 PowerShell 脚本执行策略限制。
-3. 普通使用和调试采用同一 Windows 用户登录会话，目标编辑器和 WhiteDot 均以普通用户权限启动。
+在 Windows x64 安装 Python 3.11，用 VS Code 打开包含 `main.py` 和 `WhiteDot.spec` 的项目根目录。在 PowerShell 中执行：
 
 ```powershell
 py -3.11 -m venv .venv
@@ -26,52 +25,35 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-在 Windows 本机构建与 Release 相同的文件：
+构建前，先通过托盘退出从 `dist` 运行的旧程序。以下命令生成单文件便携版，并在打包产物上执行离线自检。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build.py
 ```
 
-脚本生成 UI Automation 类型库绑定，运行 PyInstaller，并对打包后的程序执行离线自检。x64 成品路径为 `dist\WhiteDot-windows-x64.exe`。可在没有 Python 开发环境的普通 Windows 用户账号中双击验收。重复打包前，请从托盘退出正在运行的同路径 EXE。
+输出文件为 `dist\WhiteDot-windows-x64.exe`。在普通 Windows 用户账号中可直接运行。
 
 ## 实机验收
 
-先在 Chrome 或 Edge 打开仓库里的 `tests/fixtures/browser-fields.html`。页面只包含合成样例，也可作为离线本地文件打开。AI 检查仍需连接已配置的模型。用相同样例检查 Codex 的消息输入框，记录 Windows、浏览器及 Codex 的版本和显示缩放。
-
-| 操作 | 应观察到的行为 |
+| 场景 | 检查方法 |
 | --- | --- |
-| 在单行框末尾输入空格后停顿 | 有模型配置时，`speling` 应产生建议。宿主提供词坐标时，红线出现在该词下方。 |
-| 在多行框里接受第二个 `teh` 的建议 | 第一个拼错的词保持原样。第二行前的 emoji 不应导致错位。 |
-| 让旧建议保持可见，然后继续输入或切换到另一个文本框 | 过期建议不能覆盖刚输入的内容或其他输入框。 |
-| 将焦点放在 Codex 消息输入框，输入 `She go home.`，点击白点 | 当该版本公开可编辑文本时，能看到基于当前内容的语法重写；检查实际显示的来源与原文。 |
-| 在带粗体的富文本框中尝试建议 | 确认原有粗体和结构得到保留。宿主缺少安全定点写入能力时，请使用面板复制。 |
-| 聚焦密码框、只读输入框、空白处 | 这些控件不应被自动校对。此时从白点打开手动输入框。 |
-| 手动输入、接受建议、重写全文、复制 | 空输入时复制禁用。重写后上下对照，并可单独复制下方结果。 |
-| 在缩放为 100% 与 150% 的两台显示器间移动浏览器 | 白点可拖动，拼写线跟随目标词和当前显示器缩放。滚动后检查有无残留。 |
-| 移动白点、开关登录启动、重新登录 | 开关状态和白点位置应保留。关闭后下次登录不会自行启动。 |
-| 输入错误 API Key并保存 | 设置应提示验证失败。已验证的配置应继续可用。 |
+| 白点 | 在明、暗壁纸上观察白点与阴影是否同心。拖动到另一台显示器，退出后重开，确认位置恢复。 |
+| 开始输入 | 在其他软件中打字，随后点击白点，应打开独立编辑器并能立即输入。 |
+| 词级修改 | 在面板内输入 `🙂 I saw teh cat.`。等校对完成后点开错词，选择 `the`，确认 emoji 和其余文字保留。 |
+| 前后版本 | 在等待校对或重写时继续修改正文，确认旧结果不会盖掉新内容。 |
+| 复制 | 检查空文本时复制按钮状态，然后分别复制非空原文和重写结果，在记事本中核对。 |
+| 窗口 | 核对靠近屏幕四边、100% 与 150% 缩放、跨显示器移动时，面板与操作按钮可见。 |
+| 托盘 | 打开模型设置并验证一次错误 Key，确认显示错误且上次有效配置仍可使用。切换登录启动并重新登录验收。 |
 
-## 无法捕捉某个应用时
+共享 UI 在 `whitedot/windows_ui.py`，面板状态和后台任务在 `whitedot/app.py`。服务商兼容和凭据存储分别在 `whitedot/provider.py`、`whitedot/settings.py`。调整登录启动时检查 `whitedot/startup.py`。
 
-Windows 适配器读取前台控件的 UI Automation 信息。使用 Accessibility Insights for Windows 的 **Live Inspect** 选中**合成文本**输入框，观察 `ControlType`、`HasKeyboardFocus`、`IsPassword`、是否具有可写 `ValuePattern`、`TextPattern` 以及词范围边界。记录可用模式即可；故障报告不需要真实的输入内容。[Microsoft 的 UIA 文本模式说明](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingtextandtextrange)
+可直接交给 Windows 端 AI 代理的任务：
 
-- 只能看到浏览器的只读 `Document` 时，先点入实际文本框。部分 Electron、自绘编辑器或特定版本可能只暴露外层窗口。此时白点可打开手动编辑器。
-- 有 `ValuePattern` 可读而缺少 `TextPattern` 时，程序能读取内容并显示重写，但无法取得可信的词级坐标。文本跨行、emoji、重复拼写等情况会再次核对词前内容。
-- 可写的纯文本 Edit 控件支持接受建议。富文本的子控件可能代表格式或嵌入对象。当前适配器会拒绝有丢失结构风险的整框写入，仍可从面板复制。
-- 权限级别、远程桌面的当前会话及系统安全桌面会影响 UI Automation。用普通用户权限启动两个程序，在同一会话中测试。
-- 首次从源码运行时，`comtypes` 会从 Windows 自带的 `UIAutomationCore.dll` 生成绑定。便携包在构建时生成并收集这些绑定。
+> 按 docs/WINDOWS.md 从源码运行 WhiteDot、执行离线测试并构建 x64 便携 EXE。用合成样例检查白点在不同背景和缩放下的视觉效果，以及编辑器输入、建议替换、重写、复制和草稿收起再打开的流程。由我在程序中输入模型密钥。记录 Windows 版本、屏幕缩放和可复现步骤，修复后运行同一套测试与打包命令。
 
-平台接口位于 `whitedot/platforms/windows.py`。`capture()` 返回焦点快照，`rects()` 返回可见的词级矩形，`replace()` 在修改前复核控件标识与原文。跨平台偏移以 Python Unicode 码点为单位，Windows 适配器负责处理提供程序的字符单位、换行符和屏幕缩放。更改前先运行 `tests/test_windows_adapter.py`，并用上述场景覆盖真实的浏览器与 Codex。
+## 发布到 GitHub
 
-可复制给 Windows 端代理：
-
-> 请在当前 WhiteDot 项目按 docs/WINDOWS.md 建立虚拟环境、运行离线测试并打包便携 EXE。优先验证 Chrome/Edge 和 Codex 输入框的捕捉、重复错词的位置、点击建议和输入过程中切换焦点的行为。使用 tests/fixtures/browser-fields.html 和合成段落；由我在程序设置里输入密钥。记录实际可复现的问题、程序版本和缩放比例。将 Windows 平台修正放在 whitedot/platforms/windows.py，共享逻辑单独测试，然后重新构建同一套 Release 产物。
-
-## GitHub Release
-
-源码可在 Mac 和 Windows 共用。每个二进制包由对应操作系统的 runner 生成。PyInstaller 官方说明需要在目标操作系统上构建相应的分发包。[PyInstaller 官方文档](https://pyinstaller.org/en/stable/)
-
-1. 仓库根目录须直接包含 `.github/workflows/release.yml`。在 VS Code 首次发布仓库时选择 Public，并让 GitHub Actions 在仓库中启用。
-2. 在 GitHub 网页选择 **Actions → Build desktop releases → Run workflow**，选择已推送的主分支。如果只想试构建，将 **Optional release tag** 留空。运行成功后可在该次运行的 **Artifacts** 下载两个包。
-3. 要发布公开下载，在同一窗口的 **Optional release tag** 填写版本号，例如 `v0.1.0`，然后点击 **Run workflow**。两个平台的自动测试、打包和成品自检全部成功后，工作流会为本次构建的提交创建标签和 Release，上传 Windows EXE、macOS ZIP、可选浏览器扩展 ZIP 和 SHA-256 校验表。
-4. 同一提交可以用原标签重跑，同名下载文件会被替换。如果原标签已指向另一个提交，工作流会保留已有版本并提示改用新版本号。已通过 VS Code 推送的版本标签也会触发发布。仓库或组织必须允许该工作流的 `contents: write` 权限。
+1. 在 VS Code 将本轮修改同步到已配置的 GitHub 仓库。
+2. 打开仓库的 **Actions → Build desktop releases → Run workflow**，选择已同步的分支。将 **Optional release tag** 留空可先生成 Actions Artifacts。
+3. 确认试用通过后，填写新的版本标签（例如 `v0.2.0`）并运行。两个平台都构建成功后，工作流把 macOS ZIP、Windows 便携 EXE 和 SHA-256 校验表上传至同一 Release。向远程推送版本标签也可触发发布。
+4. macOS 上可以开发共享源码。Windows EXE 在 Windows 本机或同一仓库的 Windows runner 上构建。

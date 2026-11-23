@@ -5,7 +5,6 @@ import platform
 import struct
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,11 +27,11 @@ def build_icon(macos):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#41454d"))
         painter.drawRoundedRect(QRectF(3, 3, 122, 122), 29, 29)
-        shadow = QRadialGradient(64, 69, 49)
+        shadow = QRadialGradient(64, 64, 49)
         shadow.setColorAt(0.64, QColor(0, 0, 0, 100))
         shadow.setColorAt(1, QColor(0, 0, 0, 0))
         painter.setBrush(shadow)
-        painter.drawEllipse(QRectF(15, 20, 98, 98))
+        painter.drawEllipse(QRectF(15, 15, 98, 98))
         painter.setBrush(QColor("#81858a"))
         painter.drawEllipse(QRectF(21, 21, 86, 86))
         painter.setBrush(QColor("#c4c6c9"))
@@ -65,29 +64,11 @@ def build_icon(macos):
         (BUILD / "WhiteDot.ico").write_bytes(struct.pack("<HHH", 0, 1, len(sizes)) + b"".join(entries) + payload)
 
 
-def build_browser_extension():
-    source = ROOT / "browser-extension"
-    if not (source / "manifest.json").is_file():
-        raise FileNotFoundError("Missing browser-extension/manifest.json")
-    asset = DIST / "WhiteDot-browser-extension.zip"
-    with zipfile.ZipFile(asset, "w", compression=zipfile.ZIP_DEFLATED) as package:
-        for item in sorted(source.rglob("*")):
-            relative = item.relative_to(source)
-            if any(part.startswith(".") for part in relative.parts):
-                continue
-            if item.is_file() and item.suffix in {".js", ".html", ".json", ".css", ".png", ".svg"}:
-                package.write(item, relative)
-    return asset
-
-
 def main():
     if sys.platform not in ("darwin", "win32"):
         raise SystemExit("Build on macOS for a .app, or Windows for a portable .exe.")
     macos = sys.platform == "darwin"
     build_icon(macos)
-    if not macos:
-        from comtypes.client import GetModule
-        GetModule("UIAutomationCore.dll")
     build_env = dict(os.environ)
     build_env.setdefault("PYINSTALLER_CONFIG_DIR", str(ROOT / "build" / "cache"))
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "WhiteDot.spec"],
@@ -113,8 +94,6 @@ def main():
         asset = DIST / f"WhiteDot-windows-{arch}.exe"
         binary.replace(asset)
     print(f"Built and smoke-tested {asset}")
-    if macos:
-        print(f"Packaged {build_browser_extension()}")
 
 
 if __name__ == "__main__":

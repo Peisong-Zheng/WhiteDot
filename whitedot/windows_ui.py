@@ -1,48 +1,74 @@
-"""Small native floating surfaces shared by macOS and Windows."""
-import math
+"""Floating launcher and writing surfaces shared by both desktop platforms."""
+from functools import lru_cache
+from pathlib import Path
+import re
 import sys
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
-                               QPushButton, QTextEdit, QVBoxLayout, QWidget)
-
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (QColor, QFontDatabase, QIcon, QKeySequence, QPainter, QPainterPath,
+                           QPalette, QPen, QPixmap, QRadialGradient, QShortcut, QTextCharFormat, QTextCursor)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+                               QTextEdit, QVBoxLayout, QWidget)
 
 TOP = Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 NO_FOCUS = TOP | Qt.WindowDoesNotAcceptFocus
+WORDS = re.compile(r"[A-Za-z]+(?:[’'-][A-Za-z]+)*")
+
 STYLE = """
-QWidget {color:#26332f; font-size:13px;}
-QFrame#paper, QDialog {background:#f8faf9; border:1px solid #cbd3ce; border-radius:12px;}
-QLabel#heading {font-size:16px; font-weight:650;}
-QLabel#caption {color:#455e54; font-size:12px;}
-QTextEdit, QLineEdit, QComboBox {background:white; color:#18261f; border:1px solid #bccbc2;
- border-radius:6px; padding:6px; selection-background-color:#bddbd0;}
-QPushButton {background:white; border:1px solid #bdc9c1; border-radius:6px; padding:5px 10px;}
-QPushButton:hover {background:#e6eee9;}
-QPushButton:disabled {color:#8a948e; background:#edf0ee; border-color:#d7ded9;}
-QPushButton#action {background:#245d4d; color:white; border-color:#245d4d;}
-QPushButton#action:disabled {background:#e4eae6; color:#89978f; border-color:#d7ded9;}
+QWidget { color:#232a36; font-size:13px; }
+QDialog { background:#fafbfc; }
+QLabel { background:transparent; }
+QLabel#wordmark { font-family:Spectral; font-size:26px; color:#263047; }
+QLabel#heading { font-size:18px; font-weight:600; }
+QLabel#sectionLabel { font-size:12px; color:#4c566d; font-weight:600; }
+QLabel#count, QLabel#caption { font-size:12px; color:#5e6878; }
+QLabel#word { font-family:Spectral; font-size:20px; color:#222e46; }
+QFrame#rule { background:#e0e3e9; border:none; }
+QFrame#toolbar { background:#f5f6f9; border:1px solid #e2e5eb; border-radius:9px; }
+QTextEdit { border:0; padding:0; background:transparent; color:#242a38;
+  selection-background-color:#d9e3ff; selection-color:#182444; font-family:Spectral; font-size:21px; }
+QLineEdit, QComboBox { background:white; color:#252e40; border:1px solid #c2c9d3;
+  border-radius:6px; min-height:24px; padding:4px 8px; selection-background-color:#d9e3ff; }
+QComboBox::drop-down { subcontrol-origin:padding; subcontrol-position:center right; width:24px; border:0; }
+QLineEdit:focus, QComboBox:focus { border-color:#435a99; }
+QPushButton { background:transparent; color:#46516b; border:1px solid transparent;
+  border-radius:6px; min-height:20px; padding:4px 8px; font-weight:500; }
+QPushButton:hover { background:#e9ecf3; color:#253652; }
+QPushButton:pressed { background:#dde2ed; }
+QPushButton:focus { border-color:#6479b1; }
+QPushButton:disabled { color:#87909e; }
+QPushButton#action { background:#35477d; color:white; border:1px solid #35477d; padding:4px 12px; }
+QPushButton#action:hover { background:#273a70; }
+QPushButton#action:pressed { background:#20305c; }
+QPushButton#action:focus { border:2px solid #849be0; }
+QPushButton#action:disabled { color:#737d91; background:#e5e8ee; border-color:#e5e8ee; }
+QPushButton#tool { padding:0; min-height:0; }
+QPushButton#candidate { background:#edf1fb; color:#293e71; text-align:left; padding:6px 11px; }
+QPushButton#candidate:hover { background:#dfe7fb; }
+QScrollBar:vertical { background:transparent; width:5px; margin:0; }
+QScrollBar::handle:vertical { background:#bac2d0; border-radius:2px; min-height:20px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
+QScrollBar::sub-page:vertical, QScrollBar::add-page:vertical { background:transparent; }
 """
 
 
+@lru_cache(maxsize=1)
+def load_typeface():
+    return QFontDatabase.addApplicationFont(str(Path(__file__).with_name("assets") / "Spectral-Regular.ttf"))
+
+
 def native_float(widget):
-    """Show Qt tool windows in full-screen Spaces and without hiding on deactivation."""
     widget.setAttribute(Qt.WA_MacAlwaysShowToolWindow, True)
     if widget.windowFlags() & Qt.WindowDoesNotAcceptFocus:
         widget.setAttribute(Qt.WA_ShowWithoutActivating)
     if sys.platform == "darwin" and QApplication.platformName() == "cocoa":
         import objc
         from AppKit import (NSWindowCollectionBehaviorCanJoinAllSpaces,
-                            NSWindowCollectionBehaviorFullScreenAuxiliary, NSStatusWindowLevel,
-                            NSWindowStyleMaskNonactivatingPanel)
-        from .platforms.cocoa_panel import panel_creation
-        with panel_creation(bool(widget.windowFlags() & Qt.WindowDoesNotAcceptFocus)):
-            view = objc.objc_object(c_void_p=int(widget.winId()))
+                            NSWindowCollectionBehaviorFullScreenAuxiliary, NSStatusWindowLevel)
+        view = objc.objc_object(c_void_p=int(widget.winId()))
         window = view.window()
         if window:
-            if widget.windowFlags() & Qt.WindowDoesNotAcceptFocus:
-                window.setStyleMask_(window.styleMask() | NSWindowStyleMaskNonactivatingPanel)
-                window.setBecomesKeyOnlyIfNeeded_(True)
+            window.setHasShadow_(False)  # The launcher and paper both draw their own shadow.
             window.setHidesOnDeactivate_(False)
             window.setLevel_(NSStatusWindowLevel)
             window.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces |
@@ -60,30 +86,84 @@ def raise_surface(widget):
 
 
 def dot_art(p, size, tray=False):
+    """One center for the face, rim and full radial falloff at any pixel density."""
+    p.save()
     p.setRenderHint(QPainter.Antialiasing)
     p.scale(size / 56, size / 56)
-    shadow = QRadialGradient(QPointF(28, 30), 26)
-    shadow.setColorAt(.52, QColor(26, 36, 32, 94))
-    shadow.setColorAt(.78, QColor(26, 36, 32, 44))
-    shadow.setColorAt(1, QColor(26, 36, 32, 0))
+    center = QPointF(28, 28)
+    shadow = QRadialGradient(center, 27)
+    shadow.setColorAt(0, QColor(29, 36, 49, 74))
+    shadow.setColorAt(.65, QColor(29, 36, 49, 74))
+    shadow.setColorAt(.76, QColor(29, 36, 49, 42))
+    shadow.setColorAt(.88, QColor(29, 36, 49, 13))
+    shadow.setColorAt(1, QColor(29, 36, 49, 0))
     p.setPen(Qt.NoPen)
     p.setBrush(shadow)
-    p.drawEllipse(QRectF(2, 4, 52, 52))
-    p.setPen(QPen(QColor("#82918a" if tray else "#b7c1bb"), 1))
-    p.setBrush(QColor("#f5f7f5"))
-    p.drawEllipse(QRectF(8, 7, 40, 40))
-    p.setPen(QPen(QColor("#ccd3cf"), 1.15))
+    p.drawEllipse(center, 27, 27)
+    p.setPen(QPen(QColor("#8a93a3" if tray else "#aeb4bf"), .85))
+    p.setBrush(QColor("#edf0f4"))
+    p.drawEllipse(center, 18.5, 18.5)
+    p.setPen(QPen(QColor("#d4d9e1"), .85))
     p.setBrush(Qt.white)
-    p.drawEllipse(QRectF(14, 13, 28, 28))
+    p.drawEllipse(center, 15.5, 15.5)
+    p.restore()
 
 
 def icon():
     pix = QPixmap(112, 112)
     pix.fill(Qt.transparent)
-    painter = QPainter(pix)
-    dot_art(painter, 112, True)
-    painter.end()
+    p = QPainter(pix)
+    dot_art(p, 112, True)
+    p.end()
     return QIcon(pix)
+
+
+def glyph(kind, color="#535e75"):
+    out = QIcon()
+    for mode, ink in [(QIcon.Normal, color), (QIcon.Disabled, "#8792a3")]:
+        pix = QPixmap(48, 48)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.scale(2, 2)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(ink), 1.65, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        def line(x1, y1, x2, y2):
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        if kind == "close":
+            line(7, 7, 17, 17)
+            line(17, 7, 7, 17)
+        elif kind == "copy":
+            p.drawRoundedRect(QRectF(8.5, 8.5, 11, 12), 2.3, 2.3)
+            path = QPainterPath(QPointF(15.5, 5.6))
+            path.quadTo(15.5, 3.5, 13.4, 3.5)
+            path.lineTo(6.2, 3.5)
+            path.quadTo(4.3, 3.5, 4.3, 5.5)
+            path.lineTo(4.3, 13.4)
+            path.quadTo(4.3, 15.5, 6.2, 15.5)
+            p.drawPath(path)
+        elif kind == "rewrite":
+            path = QPainterPath(QPointF(5, 18))
+            path.lineTo(6, 13.5)
+            path.lineTo(15.6, 4)
+            path.quadTo(16.5, 3.2, 17.5, 4.2)
+            path.lineTo(19.3, 6)
+            path.quadTo(20.1, 7, 19.1, 8)
+            path.lineTo(9.5, 17.1)
+            path.closeSubpath()
+            p.drawPath(path)
+            line(14, 6, 17.5, 9.5)
+            line(13, 19.5, 20, 19.5)
+        elif kind == "settings":
+            line(4, 7.5, 9, 7.5)
+            line(14, 7.5, 20, 7.5)
+            line(4, 16.5, 13, 16.5)
+            line(18, 16.5, 20, 16.5)
+            p.drawEllipse(QPointF(11.5, 7.5), 2.5, 2.5)
+            p.drawEllipse(QPointF(15.5, 16.5), 2.5, 2.5)
+        p.end()
+        pix.setDevicePixelRatio(2)
+        out.addPixmap(pix, mode)
+    return out
 
 
 def clamped(pos, size, screen):
@@ -98,19 +178,19 @@ class Dot(QWidget):
     menu_at = Signal(QPoint)
 
     def __init__(self):
-        super().__init__(None, NO_FOCUS)
+        super().__init__(None, NO_FOCUS | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(56, 56)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("WhiteDot · 点按打开，拖动移位")
-        self.setAccessibleName("WhiteDot 拼写助手")
+        self.setAccessibleName("打开或收起英文校对")
         self.origin = None
         self.dragging = False
         native_float(self)
 
     def paintEvent(self, event):
         p = QPainter(self)
-        dot_art(p, 56)
+        dot_art(p, self.width())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.RightButton:
@@ -140,18 +220,87 @@ class Dot(QWidget):
 
 class Paper(QWidget):
     def __init__(self, flags):
-        super().__init__(None, flags)
+        super().__init__(None, flags | Qt.NoDropShadowWindowHint)
+        load_typeface()
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(STYLE)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(1, 1, 1, 1)
-        frame = QFrame()
-        frame.setObjectName("paper")
-        outer.addWidget(frame)
-        self.box = QVBoxLayout(frame)
-        self.box.setContentsMargins(15, 12, 15, 12)
-        self.box.setSpacing(9)
+        self.box = QVBoxLayout(self)
+        self.box.setContentsMargins(29, 17, 29, 21)
+        self.box.setSpacing(0)
         native_float(self)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        shell = QRectF(self.rect()).adjusted(7, 6, -7, -8)
+        p.setPen(Qt.NoPen)
+        for pad, opacity in [(5.5, 5), (4, 7), (2.5, 10), (1, 14)]:
+            p.setBrush(QColor(30, 40, 65, opacity))
+            r = shell.adjusted(-pad, -pad, pad, pad).translated(0, 1)
+            p.drawRoundedRect(r, 14 + pad, 14 + pad)
+        p.setPen(QPen(QColor("#c6ccd6"), 1))
+        p.setBrush(QColor("#fdfdfd"))
+        p.drawRoundedRect(shell, 14, 14)
+
+
+def rule():
+    line = QFrame()
+    line.setObjectName("rule")
+    line.setFixedHeight(1)
+    return line
+
+
+def button(text, slot=None):
+    item = QPushButton(text)
+    item.setCursor(Qt.PointingHandCursor)
+    if slot:
+        item.clicked.connect(slot)
+    return item
+
+
+def tool_button(name, label, slot):
+    b = button("", slot)
+    b.setObjectName("tool")
+    b.setIcon(glyph(name))
+    b.setIconSize(QSize(19, 19))
+    b.setFixedSize(28, 28)
+    b.setToolTip(label)
+    b.setAccessibleName(label)
+    return b
+
+
+def text_label(text, name):
+    label = QLabel(text)
+    label.setObjectName(name)
+    label.setTextFormat(Qt.PlainText)
+    return label
+
+
+class BrandMark(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(25, 25)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#28344a"))
+        p.drawRoundedRect(QRectF(0.5, 0.5, 24, 24), 7, 7)
+        p.setBrush(QColor("#586278"))
+        p.drawEllipse(QPointF(12.5, 12.5), 7.3, 7.3)
+        p.setBrush(QColor("#fafbfe"))
+        p.drawEllipse(QPointF(12.5, 12.5), 5.2, 5.2)
+
+
+def prepare_text(widget):
+    widget.setFrameShape(QFrame.NoFrame)
+    widget.document().setDocumentMargin(0)
+    widget.setAcceptRichText(False)
+    widget.setTabChangesFocus(True)
+    palette = widget.palette()
+    palette.setColor(QPalette.PlaceholderText, QColor("#757f8e"))
+    widget.setPalette(palette)
 
 
 class Editor(QTextEdit):
@@ -159,9 +308,9 @@ class Editor(QTextEdit):
 
     def __init__(self):
         super().__init__()
+        prepare_text(self)
         self.issues = []
-        self.setAcceptRichText(False)
-        self.setPlaceholderText("在这里输入或粘贴英文…")
+        self.setPlaceholderText("输入或粘贴英文…")
         self.setAccessibleName("英文原文")
 
     def mark(self, issues):
@@ -175,7 +324,7 @@ class Editor(QTextEdit):
             cursor.setPosition(utf16(value[:issue.end]), QTextCursor.KeepAnchor)
             sel.cursor = cursor
             fmt = QTextCharFormat()
-            fmt.setUnderlineColor(QColor("#c23543"))
+            fmt.setUnderlineColor(QColor("#bd394a"))
             fmt.setUnderlineStyle(QTextCharFormat.WaveUnderline)
             sel.format = fmt
             selections.append(sel)
@@ -193,27 +342,26 @@ class Editor(QTextEdit):
                 return
 
 
-def utf16(s):
-    return len(s.encode("utf-16-le")) // 2
+def utf16(text):
+    return len(text.encode("utf-16-le")) // 2
 
 
-def button(text, slot=None):
-    item = QPushButton(text)
-    item.setCursor(Qt.PointingHandCursor)
-    if slot:
-        item.clicked.connect(slot)
-    return item
-
-
-def copy_button(editor):
+def copy_button(editor, accessible_name):
     b = button("复制")
+    b.setAccessibleName(accessible_name)
+    b.setToolTip(accessible_name)
+    b.setIcon(glyph("copy"))
+    b.setIconSize(QSize(15, 15))
+
     def update():
         b.setEnabled(bool(editor.toPlainText()))
         b.setText("复制")
+
     def copy():
         QApplication.clipboard().setText(editor.toPlainText())
         b.setText("已复制")
-        QTimer.singleShot(1000, b, update)
+        QTimer.singleShot(1100, b, update)
+
     b.clicked.connect(copy)
     editor.textChanged.connect(update)
     update()
@@ -222,59 +370,90 @@ def copy_button(editor):
 
 class Panel(Paper):
     closing = Signal()
+    settings_requested = Signal()
 
-    def __init__(self, external=False):
-        super().__init__(NO_FOCUS if external else TOP)
-        self.external = external
-        self.setWindowTitle("WhiteDot")
-        top = QHBoxLayout()
-        self.title = QLabel("语法重写" if external else "英文校对")
-        self.title.setObjectName("heading")
-        top.addWidget(self.title)
-        top.addStretch()
+    def __init__(self):
+        super().__init__(TOP)
+        self.setWindowTitle("WhiteDot 英文校对")
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        header.addWidget(BrandMark())
+        header.addWidget(text_label("WhiteDot", "wordmark"))
+        header.addStretch()
+        self.settings_button = tool_button("settings", "AI 服务与密钥", self.settings_requested.emit)
+        header.addWidget(self.settings_button)
+        self.dismiss = tool_button("close", "收起（Esc）", self.closing.emit)
+        header.addWidget(self.dismiss)
+        self.box.addLayout(header)
+        self.box.addSpacing(9)
+        self.box.addWidget(rule())
+        self.box.addSpacing(14)
+
+        self.editor = Editor()
+        self.editor.setMinimumHeight(52)
+        row = QHBoxLayout()
+        row.addWidget(text_label("原文", "sectionLabel"))
+        row.addStretch()
+        self.count = text_label("0 词", "count")
+        row.addWidget(self.count)
+        self.editor.textChanged.connect(self.count_words)
+        self.box.addLayout(row)
+        self.box.addSpacing(5)
+        self.box.addWidget(self.editor, 3)
+
+        toolbar = QFrame()
+        toolbar.setObjectName("toolbar")
+        actions = QHBoxLayout(toolbar)
+        actions.setContentsMargins(9, 4, 4, 4)
+        actions.setSpacing(3)
+        self.status = text_label("", "caption")
+        self.status.setWordWrap(True)
+        self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.status.setAccessibleName("校对状态")
+        actions.addWidget(self.status, 1)
+        self.original_copy = copy_button(self.editor, "复制原文")
+        actions.addWidget(self.original_copy)
         self.rewrite = button("语法重写")
         self.rewrite.setObjectName("action")
-        top.addWidget(self.rewrite)
-        self.dismiss = button("×", self.closing.emit)
-        self.dismiss.setAccessibleName("收起")
-        self.dismiss.setFixedWidth(32)
-        top.addWidget(self.dismiss)
-        self.box.addLayout(top)
-        self.editor = Editor()
-        self.editor.setMinimumHeight(86)
-        self.editor.setReadOnly(external)
-        self.box.addWidget(self.editor, 1)
-        row = QHBoxLayout()
-        self.status = QLabel()
-        self.status.setObjectName("caption")
-        self.status.setWordWrap(True)
-        self.status.setTextFormat(Qt.PlainText)
-        row.addWidget(self.status, 1)
-        self.original_copy = copy_button(self.editor)
-        row.addWidget(self.original_copy)
-        self.box.addLayout(row)
-        self.result_group = QWidget()
-        result_layout = QVBoxLayout(self.result_group)
-        result_layout.setContentsMargins(0, 5, 0, 0)
-        row = QHBoxLayout()
-        result_label = QLabel("重写结果")
-        result_label.setObjectName("heading")
-        row.addWidget(result_label)
-        row.addStretch()
-        self.result = QTextEdit()
-        self.result.setAccessibleName("重写结果")
-        self.result.setReadOnly(True)
-        self.result.setPlaceholderText("等待重写…")
-        self.result.setMinimumHeight(80)
-        self.result_copy = copy_button(self.result)
-        row.addWidget(self.result_copy)
-        result_layout.addLayout(row)
-        result_layout.addWidget(self.result)
-        self.box.addWidget(self.result_group, 1)
-        self.result_group.setVisible(external)
+        self.rewrite.setIcon(glyph("rewrite", "#ffffff"))
+        self.rewrite.setIconSize(QSize(16, 16))
         self.rewrite.setEnabled(False)
-        if external:
-            self.rewrite.setText("重新生成")
+        self.rewrite.setToolTip("语法重写（⌘ Return）" if sys.platform == "darwin" else "语法重写（Ctrl + Enter）")
+        for key in ("Ctrl+Return", "Ctrl+Enter"):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(self.rewrite.click)
+        actions.addWidget(self.rewrite)
+        self.box.addSpacing(10)
+        self.box.addWidget(toolbar)
+
+        self.result_group = QWidget()
+        result_box = QVBoxLayout(self.result_group)
+        result_box.setContentsMargins(0, 15, 0, 0)
+        result_box.setSpacing(0)
+        self.result = QTextEdit()
+        prepare_text(self.result)
+        self.result.setReadOnly(True)
+        self.result.setAccessibleName("语法重写结果")
+        self.result.setPlaceholderText("等待重写结果…")
+        self.result.setMinimumHeight(56)
+        row = QHBoxLayout()
+        row.addWidget(text_label("重写结果", "sectionLabel"))
+        row.addStretch()
+        self.result_copy = copy_button(self.result, "复制重写结果")
+        row.addWidget(self.result_copy)
+        result_box.addLayout(row)
+        result_box.addSpacing(3)
+        result_box.addWidget(self.result, 1)
+        # The lower group also contains its label and copy control. Give both
+        # text viewports comparable space when the result is visible.
+        self.box.addWidget(self.result_group, 4)
+        self.result_group.hide()
+
+    def count_words(self):
+        self.count.setText(f"{len(WORDS.findall(self.editor.toPlainText())):,} 词")
+
+    def sizeHint(self):
+        return QSize(468, 285 if self.result_group.isHidden() else 450)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -287,57 +466,26 @@ class Panel(Paper):
         self.closing.emit()
 
 
-class Mark(QWidget):
-    """Only the narrow strip directly under a flagged word intercepts a click."""
-    clicked = Signal(object, QPoint)
-    def __init__(self):
-        super().__init__(None, NO_FOCUS)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setCursor(Qt.PointingHandCursor)
-        self.issue = None
-        native_float(self)
-
-    def display(self, rect, issue):
-        self.issue = issue
-        self.setGeometry(round(rect.x), math.ceil(rect.y + rect.h) - 4,
-                         max(3, round(rect.w)), 5)
-        self.show()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor(255, 255, 255, 2))
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor("#d73645"), 1.6))
-        path = QPainterPath()
-        path.moveTo(0, 2.6)
-        for x in range(0, self.width(), 4):
-            path.quadTo(x + 1, .7, x + 2, 2.6)
-            path.quadTo(x + 3, 4.5, x + 4, 2.6)
-        p.drawPath(path)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.issue:
-            self.clicked.emit(self.issue, event.globalPosition().toPoint())
-
-
 class Suggestion(Paper):
     chosen = Signal(str)
+
     def __init__(self, issue):
         super().__init__(NO_FOCUS)
-        self.setMaximumWidth(360)
+        self.box.setContentsMargins(21, 13, 21, 18)
+        self.box.setSpacing(5)
+        self.setMaximumWidth(340)
         top = QHBoxLayout()
-        label = QLabel(issue.original)
-        label.setTextFormat(Qt.PlainText)
+        label = text_label(issue.original, "word")
         label.setWordWrap(True)
-        label.setObjectName("heading")
         top.addWidget(label, 1)
-        top.addWidget(button("×", self.hide))
+        top.addWidget(tool_button("close", "关闭建议", self.hide))
         self.box.addLayout(top)
-        why = QLabel(issue.explanation)
-        why.setTextFormat(Qt.PlainText)
-        why.setWordWrap(True)
-        self.box.addWidget(why)
+        if issue.explanation:
+            why = text_label(issue.explanation, "caption")
+            why.setWordWrap(True)
+            self.box.addWidget(why)
         for word in issue.suggestions:
             b = button(word.replace("&", "&&") or "删除")
+            b.setObjectName("candidate")
             b.clicked.connect(lambda checked=False, value=word: self.chosen.emit(value))
             self.box.addWidget(b)

@@ -5,11 +5,8 @@ from pathlib import Path
 root = Path(SPECPATH)
 macos = sys.platform == "darwin"
 icon = str(root / "build" / "artwork" / ("WhiteDot.icns" if macos else "WhiteDot.ico"))
-hidden = []
-if not macos:
-    # Include the generated friendly wrapper; its import includes the GUID wrapper.
-    hidden.append("comtypes.gen.UIAutomationClient")
-a = Analysis([str(root / "main.py")], pathex=[str(root)], hiddenimports=hidden,
+a = Analysis([str(root / "main.py")], pathex=[str(root)],
+             datas=[(str(root / "whitedot" / "assets"), "whitedot/assets")],
              excludes=["PyQt5", "PyQt6", "tkinter"])
 pyz = PYZ(a.pure)
 if macos:
@@ -18,8 +15,8 @@ if macos:
     coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="WhiteDot")
     app = BUNDLE(coll, name="WhiteDot.app", icon=icon, bundle_identifier="io.whitedot.writer",
                  info_plist={"LSUIElement": True, "CFBundleDisplayName": "WhiteDot",
-                             "NSHighResolutionCapable": True,
-                             "NSAccessibilityUsageDescription": "WhiteDot uses accessibility to check the focused English text field."})
+                             "CFBundleShortVersionString": "0.2.0", "CFBundleVersion": "0.2.0",
+                             "NSHighResolutionCapable": True})
 else:
     exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="WhiteDot", console=False,
               strip=False, upx=False, icon=icon)
