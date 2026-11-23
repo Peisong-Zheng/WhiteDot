@@ -4,7 +4,7 @@ __pycache__/
 .DS_Store
 .env*
 build/
-dist/
+
 release/
 *.spec
 !WhiteDot.spec
