@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>WhiteDot 配对</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:18px;width:290px;background:#f8faf9;color:#23372d;font:14px/1.5 system-ui,sans-serif}
+h1{font-size:18px;margin:0 0 8px}p{margin:0 0 12px}label{font-weight:600}input,button{font:inherit;border:1px solid #abbcb0;border-radius:6px}
+input{width:100%;margin:4px 0 10px;padding:6px}button{padding:5px 12px;color:inherit;background:white}button[type=submit]{background:#285d48;color:white}
+#status{margin:8px 0 0}
+</style>
+<h1>连接 WhiteDot</h1><p>在桌面端白点的右键菜单中复制浏览器配对码。</p>
+<form><label for="code">桌面配对码</label><input id="code" type="password" autocomplete="off" spellcheck="false" required>
+<button type="submit">保存配对码</button> <button type="button" id="forget">解除配对</button></form>
+<p id="status" role="status"></p><script src="popup.js"></script>
+</html>

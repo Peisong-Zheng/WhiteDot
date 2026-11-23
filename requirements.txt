@@ -1,0 +1,7 @@
+PySide6>=6.8,<6.11
+keyring>=25,<26
+certifi>=2024.7.4
+pyobjc-core>=11,<13; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=11,<13; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=11,<13; sys_platform == "darwin"
+comtypes>=1.4.8,<2; sys_platform == "win32"
