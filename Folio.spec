@@ -10,7 +10,7 @@ macos = sys.platform == "darwin"
 icon = str(root / "build" / "artwork" / ("Folio.icns" if macos else "Folio.ico"))
 a = Analysis([str(root / "main.py")], pathex=[str(root)],
              datas=[(str(root / "whitedot" / "assets"), "whitedot/assets")],
-             excludes=["PyQt5", "PyQt6", "tkinter"])
+             excludes=["PyQt5", "PyQt6", "tkinter", "keyring"])
 pyz = PYZ(a.pure)
 if macos:
     exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Folio", console=False,

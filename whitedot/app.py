@@ -1,4 +1,8 @@
 """Manual proofreading, draft revisions and desktop controls."""
+from bisect import bisect_right
+from dataclasses import replace
+from os.path import commonprefix
+import re
 import sys
 import threading
 
@@ -8,6 +12,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFormLayout, QH
                                QLineEdit, QMenu, QMessageBox, QSystemTrayIcon, QVBoxLayout, QWidget)
 
 from . import startup
+from .local_spelling import check_local
 from .privacy import input_status
 from .provider import MAX_TEXT, PRESETS, Provider, ProviderConfig, ProviderError
 from .settings import StorageError
@@ -48,7 +53,7 @@ class Jobs(QObject):
 
 
 class SavedProvider:
-    """Open the OS credential store only when a draft actually needs the model."""
+    """Build the provider from its local connection when a draft needs the model."""
     def __init__(self, prefs):
         self.prefs = prefs
         self.config = prefs.config
@@ -65,7 +70,7 @@ class SavedProvider:
                 try:
                     key = self.prefs.get_key(self.config)
                     if not key:
-                        raise StorageError("The saved key is missing. Open AI settings from the tray menu to replace it.")
+                        raise StorageError("Open AI settings from the dot’s menu to enter a key for this provider.")
                     self._client = Provider(self.config, key)
                 except (StorageError, ProviderError) as exc:
                     self.access_error = str(exc)
@@ -75,7 +80,7 @@ class SavedProvider:
 
 class Configuration(QDialog):
     saved = Signal(object)
-    DISCLOSURE = "Drafts are sent to the provider below. Your API key is saved in this device’s credential store."
+    DISCLOSURE = "AI checks send your draft to this provider. Your key is stored in a plain-text file in your user account."
 
     def __init__(self, prefs, jobs):
         super().__init__(None, Qt.Dialog | Qt.WindowStaysOnTopHint)
@@ -158,9 +163,15 @@ class Configuration(QDialog):
                                   and config.base_url and config.model))
 
     def reset_key_entry(self):
-        # Only consult the endpoint index in preferences, never the vault here.
-        self.stored_key = self.prefs.has_key(self.current_config())
+        config = self.current_config()
+        self.stored_key = self.prefs.has_key(config)
         self.set_key_entry(not self.stored_key)
+        if self.prefs.connection_error:
+            self.message.setText(self.prefs.connection_error)
+        elif self.prefs.needs_key_reentry(config):
+            self.message.setText("Re-enter your key once to save it locally. " + self.DISCLOSURE)
+        else:
+            self.message.setText(self.DISCLOSURE)
 
     def toggle_key_entry(self):
         self.set_key_entry(not self.entering_key)
@@ -177,7 +188,6 @@ class Configuration(QDialog):
         self.update_save()
 
     def fill(self, config):
-        self.message.setText(self.DISCLOSURE)
         self.url.setText(config.base_url)
         self.reset_key_entry()
         self.model.setText(config.model)
@@ -230,6 +240,55 @@ class Configuration(QDialog):
         super().done(result)
 
 
+# Only remap model feedback if its entire sentence still exists at the expected
+# location. An unchanged word inside an edited sentence may now be grammatical.
+_SENTENCE_END = re.compile(r"""[.!?]+[”’"')\]]*(?=\s|$)|\n+""")
+_TYPED_SENTENCE_END = re.compile(r"""[.!?][”’"')\]]*$""")
+
+
+def sentence_spans(text):
+    spans = []
+    start = 0
+    for end in [m.end() for m in _SENTENCE_END.finditer(text)] + [len(text)]:
+        while start < end and text[start].isspace():
+            start += 1
+        last = end
+        while last > start and text[last - 1].isspace():
+            last -= 1
+        if last > start:
+            spans.append((start, last))
+        start = end
+    return spans
+
+
+def unchanged_grammar(before, after, issues):
+    if not issues or not after or before == after:
+        return issues if after else []
+    shorter = min(len(before), len(after))
+    if before.startswith(after) or after.startswith(before):
+        prefix, suffix = shorter, 0
+    else:
+        prefix = len(commonprefix((before, after)))
+        suffix = min(shorter - prefix, len(commonprefix((before[::-1], after[::-1]))))
+    old = sentence_spans(before)
+    starts = [start for start, end in old]
+    new = set(sentence_spans(after))
+    delta = len(after) - len(before)
+    kept = []
+    for issue in issues:
+        index = bisect_right(starts, issue.start) - 1
+        if index < 0:
+            continue
+        start, end = old[index]
+        if issue.end > end:
+            continue
+        if end <= prefix and (start, end) in new:
+            kept.append(issue)
+        elif start >= len(before) - suffix and (start + delta, end + delta) in new:
+            kept.append(replace(issue, start=issue.start + delta, end=issue.end + delta))
+    return kept
+
+
 class Controller(QObject):
     def __init__(self, app, prefs, jobs=None, initial_client=None, testing=False):
         super().__init__()
@@ -245,6 +304,13 @@ class Controller(QObject):
         self.check_queued = False
         self.rewriting = False
         self.issues = []
+        self.local_issues = []
+        self.grammar_issues = []
+        self.draft = ""
+        self.input_problem = ""
+        self.open_generation = 0
+        self.sentence_anchor = ""
+        self.held_word = None
         self.check_error = ""
         self.rewrite_error = ""
         self.review_index = None
@@ -258,9 +324,17 @@ class Controller(QObject):
         self.dot = Dot()
         self.panel = Panel()
         self.delay = QTimer(self)
-        self.delay.setInterval(900)
+        self.delay.setInterval(450)
         self.delay.setSingleShot(True)
         self.delay.timeout.connect(self.run_check)
+        self.word_delay = QTimer(self)
+        self.word_delay.setSingleShot(True)
+        self.word_delay.setInterval(160)
+        self.word_delay.timeout.connect(self.finish_word)
+        self.sentence_delay = QTimer(self)
+        self.sentence_delay.setSingleShot(True)
+        self.sentence_delay.setInterval(200)
+        self.sentence_delay.timeout.connect(self.check_completed_sentence)
         self.panel.editor.textChanged.connect(self.edited)
         self.panel.editor.issue_click.connect(self.show_issue)
         self.panel.closing.connect(self.close_panel)
@@ -421,6 +495,7 @@ class Controller(QObject):
 
     def use_client(self, client):
         self.client = client
+        self.grammar_issues = []
         self.edited()
         if not self.return_to_panel:
             self.notify("AI service connected.")
@@ -445,7 +520,11 @@ class Controller(QObject):
             return
         self.panel.hide()
         self.version += 1
+        self.open_generation += 1
         self.delay.stop()
+        self.sentence_delay.stop()
+        self.word_delay.stop()
+        self.finish_word()
         self.check_queued = False
         self.hide_bubble()
         if self.rewriting:
@@ -484,7 +563,10 @@ class Controller(QObject):
             bubble.deleteLater()
 
     def edited(self):
-        self.needs_copy = bool(self.panel.editor.toPlainText())
+        previous = self.draft
+        self.draft = self.panel.editor.toPlainText()
+        self.input_problem = input_status(self.draft, MAX_TEXT) if self.draft else ""
+        self.needs_copy = bool(self.draft)
         self.version += 1
         self.delay.stop()
         self.check_queued = False
@@ -493,20 +575,68 @@ class Controller(QObject):
         self.check_error = ""
         self.rewrite_error = ""
         self.review_index = None
-        self.issues = []
         self.hide_bubble()
-        self.panel.editor.mark([])
-        self.panel.result.clear()
+        self.local_issues = check_local(self.draft) if self.draft and not self.input_problem else []
+        self.grammar_issues = unchanged_grammar(previous, self.draft, self.grammar_issues) if not self.input_problem else []
+        self.word_delay.stop()
+        self.held_word = None
+        if self.panel.editor.typing_letter and self.local_issues:
+            qt_position = self.panel.editor.textCursor().position()
+            caret = qt_position
+            if not self.draft.isascii():
+                caret = len(self.draft.encode("utf-16-le")[:2 * qt_position].decode("utf-16-le"))
+            for issue in self.local_issues:
+                if issue.start < caret <= issue.end:
+                    self.held_word = issue
+                    self.word_delay.start()
+                    break
+        self.display_issues()
+        if self.panel.result.toPlainText():
+            self.panel.result.clear()
         had_result = not self.panel.result_group.isHidden()
         self.panel.result_group.hide()
         if self.panel.isVisible():
             if had_result:
                 self.place_panel()
             self.schedule()
+            # Let a completed sentence start a check even if the next sentence
+            # is already being typed and the ordinary idle timer keeps moving.
+            if self.delay.isActive() and (self.draft.endswith("\n") or _TYPED_SENTENCE_END.search(self.draft)):
+                self.sentence_anchor = self.draft
+                self.sentence_delay.start()
+
+    def finish_word(self):
+        if self.held_word is not None:
+            self.held_word = None
+            self.display_issues()
+            self.refresh_status()
+
+    def check_completed_sentence(self):
+        if self.draft.startswith(self.sentence_anchor) and not self.checked:
+            self.run_check()
+
+    def display_issues(self):
+        # Model feedback takes precedence for overlapping spans. Keep immediate
+        # local suggestions everywhere else, even when the network check fails.
+        grammar = self.grammar_issues
+        combined = list(grammar)
+        index = 0
+        for issue in self.local_issues:
+            if issue == self.held_word:
+                continue
+            while index < len(grammar) and grammar[index].end <= issue.start:
+                index += 1
+            if index == len(grammar) or grammar[index].start >= issue.end:
+                combined.append(issue)
+        self.issues = sorted(combined, key=lambda item: item.start)
+        self.panel.editor.mark(self.issues)
+        if self.review_index is not None and self.review_index >= len(self.issues):
+            self.review_index = None
 
     def set_status(self, message, action=None, handler=None):
-        self.panel.status.setText(message)
-        self.panel.set_context_action(action)
+        if self.panel.status.text() != message or self.panel.context_action.text() != (action or ""):
+            self.panel.status.setText(message)
+            self.panel.set_context_action(action)
         self.context_handler = handler
 
     def context_action(self):
@@ -519,7 +649,7 @@ class Controller(QObject):
     def retry_access(self):
         if not self.access_error():
             return
-        # Reuse the saved profile. Only a deliberate click retries a denied read.
+        # Retry a missing or invalid local profile only on a deliberate click.
         retry_rewrite = bool(self.rewrite_error)
         self.version += 1
         self.client = SavedProvider(self.prefs)
@@ -530,19 +660,22 @@ class Controller(QObject):
             self.rewrite()
 
     def schedule(self):
-        text = self.panel.editor.toPlainText()
-        eligible = bool(self.client and not input_status(text, MAX_TEXT))
+        eligible = bool(self.client and self.draft and not self.input_problem)
         if eligible and not self.checked and not self.check_error and not self.access_error():
             self.delay.start()
         self.refresh_status()
 
     def refresh_status(self):
-        text = self.panel.editor.toPlainText()
-        problem = input_status(text, MAX_TEXT) if text else ""
+        text, problem = self.draft, self.input_problem
         can_rewrite = self.client and text and not problem and not self.rewriting and not self.access_error()
         self.panel.rewrite.setEnabled(bool(can_rewrite))
         if not self.client:
-            self.set_status("", "Connect AI", self.configure)
+            count = len(self.issues)
+            offline = f"{count} suggestion" + ("s" if count != 1 else "") if count else ""
+            legacy = self.prefs.needs_key_reentry()
+            if legacy and not offline:
+                offline = "Re-enter your key once for AI grammar and rewrites."
+            self.set_status(problem or offline, "Re-enter API key" if legacy else "Connect AI", self.configure)
         elif not text:
             self.set_status("Checks as you type")
         elif problem:
@@ -563,9 +696,9 @@ class Controller(QObject):
         elif self.checked:
             self.set_status("No issues found")
         elif self.check_inflight == self.version:
-            self.set_status("Checking…")
+            self.set_status("Checking grammar…")
         else:
-            self.set_status("Waiting to check…")
+            self.set_status("Waiting to check grammar…")
 
     def run_model(self, operation, text, complete):
         version, client = self.version, self.client
@@ -574,7 +707,7 @@ class Controller(QObject):
             if version != self.version:
                 return None
             provider = client.open() if isinstance(client, SavedProvider) else client
-            # The user may have edited or hidden the draft while macOS asked for access.
+            # The user may have edited or hidden the draft before the worker was ready.
             if version != self.version:
                 return None
             return getattr(provider, operation)(text)
@@ -582,9 +715,11 @@ class Controller(QObject):
         self.jobs.run(work, complete)
 
     def run_check(self):
-        text = self.panel.editor.toPlainText()
-        if not self.panel.isVisible() or not self.client or self.access_error() or input_status(text, MAX_TEXT):
+        text = self.draft
+        if not self.panel.isVisible() or not self.client or not text or self.access_error() or self.input_problem:
             return
+        self.delay.stop()
+        self.sentence_delay.stop()
         if self.check_inflight is not None:
             self.check_queued = self.check_inflight != self.version
             return
@@ -592,15 +727,20 @@ class Controller(QObject):
         self.check_queued = False
         self.check_error = ""
         self.refresh_status()
-        version = self.version
+        version, generation, client = self.version, self.open_generation, self.client
 
         def complete(issues, error):
             self.check_inflight = None
             if version == self.version and self.panel.isVisible():
                 self.checked = not error
                 self.check_error = error
-                self.issues = issues or []
-                self.panel.editor.mark(self.issues)
+                if not error:
+                    self.grammar_issues = issues or []
+                    self.display_issues()
+            elif (issues and generation == self.open_generation and client is self.client
+                  and self.panel.isVisible() and not self.input_problem):
+                self.grammar_issues = unchanged_grammar(text, self.draft, issues)
+                self.display_issues()
             if self.panel.isVisible():
                 self.refresh_status()
             if self.check_queued:
@@ -659,7 +799,8 @@ class Controller(QObject):
     def apply(self, issue, word, version):
         self.hide_bubble()
         text = self.panel.editor.toPlainText()
-        if (not self.panel.isVisible() or version != self.version or issue not in self.issues
+        current_span = any((i.start, i.end) == (issue.start, issue.end) for i in self.issues)
+        if (not self.panel.isVisible() or version != self.version or not current_span
                 or word not in issue.suggestions or text[issue.start:issue.end] != issue.original):
             return
         cursor = self.panel.editor.textCursor()

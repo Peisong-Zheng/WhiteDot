@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .env*
+connections.json
 build/
 /dist/*
 !/dist/Folio-windows-x64.exe

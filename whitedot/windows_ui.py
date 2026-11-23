@@ -274,25 +274,45 @@ class Editor(QTextEdit):
         prepare_text(self)
         self.issues = []
         self.ranges = []
+        self.typing_letter = False
         self.setMouseTracking(True)
         self.setPlaceholderText("Write or paste your text…")
         self.setAccessibleName("Original draft")
 
+    def keyPressEvent(self, event):
+        self.typing_letter = event.text().isalpha() or event.key() in (Qt.Key_Backspace, Qt.Key_Delete)
+        try:
+            super().keyPressEvent(event)
+        finally:
+            self.typing_letter = False
+
     def mark(self, issues):
+        if self.issues == issues:
+            # Qt moves selections along with edits. The common case is typing
+            # after all the underlines, when the existing marks still fit.
+            current = self.extraSelections()
+            if len(current) == len(self.ranges) and all(
+                    mark.cursor.selectionStart() == start and mark.cursor.selectionEnd() == end
+                    for mark, (start, end, _) in zip(current, self.ranges)):
+                return
         self.issues = issues
         value = self.toPlainText()
         selections = []
         self.ranges = []
+        fmt = QTextCharFormat()
+        fmt.setUnderlineColor(QColor("#bd394a"))
+        fmt.setUnderlineStyle(QTextCharFormat.WaveUnderline)
+        previous = qt_end = 0
         for issue in issues:
             sel = QTextEdit.ExtraSelection()
             cursor = self.textCursor()
-            cursor.setPosition(utf16(value[:issue.start]))
-            cursor.setPosition(utf16(value[:issue.end]), QTextCursor.KeepAnchor)
+            qt_start = qt_end + utf16(value[previous:issue.start])
+            qt_end = qt_start + utf16(value[issue.start:issue.end])
+            previous = issue.end
+            cursor.setPosition(qt_start)
+            cursor.setPosition(qt_end, QTextCursor.KeepAnchor)
             sel.cursor = cursor
-            self.ranges.append((cursor.selectionStart(), cursor.selectionEnd(), issue))
-            fmt = QTextCharFormat()
-            fmt.setUnderlineColor(QColor("#bd394a"))
-            fmt.setUnderlineStyle(QTextCharFormat.WaveUnderline)
+            self.ranges.append((qt_start, qt_end, issue))
             sel.format = fmt
             selections.append(sel)
         self.setExtraSelections(selections)

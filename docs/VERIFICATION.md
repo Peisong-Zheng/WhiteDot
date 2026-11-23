@@ -1,26 +1,34 @@
-# Folio 0.4.0 product review
+# Folio 0.5.0 verification
 
-Reviewed on 23 November 2026. This release renames WhiteDot to Folio, simplifies the floating editor and changes when the application accesses saved credentials.
+Tested on 23 November 2026 with synthetic drafts, a temporary local connection file and a loopback HTTP provider.
 
-## Credential and editor checks
+## Time to underline
 
-| Scenario | Observed behavior |
+On an Apple silicon Mac, the Cocoa editor received real Qt keyboard events. The timer started at the keypress or paste and stopped when the event loop had processed the red underline on the target word. These are editor timings. Display refresh and a commercial provider's response time are separate.
+
+| Interaction | Result on the test Mac |
 | --- | --- |
-| Open with a saved profile | A cold launch and opening the empty editor used only the local endpoint and account metadata. |
-| Browse settings | With native macOS windows, three cycles of opening settings, switching providers, choosing **Change key**, cancelling and returning to the editor produced zero reads, writes or deletes on the instrumented credential store. The saved view displayed **Saved**, and the replacement field opened empty. |
-| Reject a replacement | The local provider rejected a test key with HTTP 401. The saved profile still worked. Cancelling the dialog retained the original settings. |
-| Check and rewrite | The first actual proofreading request used the saved key once. Subsequent checks, several rewrites, HTTP 503 recovery and reopening the editor reused it. The coverage included a pre-0.4 account entry. |
-| Access denied or delayed | The controller stops automatic credential retries after a denial. **Retry access** enables a deliberate retry. A draft edited or collapsed while authorization is pending is discarded before submission. |
-| Upgrade the launcher | Login-item tests cover an enabled Windows or macOS registration in the same folder and a launch from a different folder. An in-place upgrade transfers the old login entry to the new executable. |
-| Work in the compact editor | The empty draft, correction, retry and stacked draft and revision were checked with native Cocoa controls. Click and keyboard suggestion selection, Escape, copying and returning to the draft passed. The README screenshot is from the running editor. |
+| Paste `I can recieve mail.` into a newly focused editor, with the spelling dictionary still cold | 28 ms |
+| Press Space after `teh`, across 30 trials | 1.4 ms median, 4.1 ms maximum |
+| Stop typing at the end of `seperate`, without adding a space | 169 ms, including the 160 ms word-completion delay |
+| Type a second typo during a deliberately blocked AI request | Both spelling marks were available for selection before the provider was allowed to return. |
 
-The macOS interaction checks used an instrumented credential store and a loopback HTTP provider with disposable test data. A system authorization dialog for a particular user's existing key depends on that Mac's Keychain settings and its trust in the updated application. No personal credential or paid provider account was used.
+A separate head-to-head test loaded the 0.4.0 and 0.5.0 editors with the same provider fixture, which always took 1.5 seconds to answer. With the minimal Qt backend, pressing Space after `I saw teh` produced the underline in **2,413 ms on 0.4.0** and **1.3 ms on 0.5.0**.
 
-## Packaged applications
+With the HTTP service paused, the editor accepted further typing. After the service returned, the grammar suggestion for an unchanged sentence appeared alongside the local spelling suggestions. Editing that sentence removed the outdated suggestion. F7 and Enter applied a local correction before an AI provider was configured. Tests also cover pasted text, Unicode offsets, regional spellings, code, word repetition and common subject–verb errors.
 
-- **macOS.** The Apple silicon ZIP was extracted and its Folio 0.4.0 bundle passed deep, strict signature verification. The packaged saved-profile self-test passed with both the native Cocoa and minimal Qt backends. Use the ZIP for distribution. Finder can attach metadata to a loose bundle inside a synced project folder.
-- **Windows.** The x64 portable executable passed its packaged self-test with the Windows GUI and minimal Qt backends in an isolated Wine environment. At 150% scaling, opening the saved settings and cancelling a key change produced zero credential reads. A separate test used a disposable Windows Credential Manager entry to check key rotation and a temporary user registry entry to check login migration. Physical Windows sign-in and multiple displays were outside this run.
+## Upgrade and credentials
 
-## Repeat the checks
+A simulated Folio 0.4 profile retained its provider and prompted for a one-time key re-entry. Local corrections worked throughout. An HTTP 401 left the connection unsaved. A successful validation created the local connections file with mode 0600 on macOS. A fresh instance then used the saved key for grammar and rewriting without requiring another setup. Opening settings showed only the saved status.
 
-All 48 automated tests passed on macOS and under Windows CPython in Wine. Run `python -m unittest discover -s tests -v` from the repository root. Run `--self-test` on the release executable to exercise a saved profile, its empty replacement field, cancelling settings, applying a correction and reopening the editor. It uses temporary preferences and performs zero credential reads. The [Windows guide](WINDOWS.md) includes the hands-on platform checks.
+The same interaction test blocked imports of the old system credential backend throughout. No import was attempted. Further tests cover interrupted writes, malformed connection files, key rotation and isolation between endpoints.
+
+## Release packages
+
+The Apple silicon ZIP and the Windows x64 EXE both identify themselves as Folio 0.5.0. The extracted macOS app passed strict, deep signature verification. Both packaged applications passed `--self-test` with their GUI and minimal Qt backends. Their bundled archives contain the offline dictionary and omit the old keyring library.
+
+All 59 regression tests passed on macOS. Windows CPython under Wine passed 58 and skipped the POSIX file-permission test. Typing and applying a local correction were also verified in the Windows Qt GUI at 150% scale. Physical Windows hardware and paid model response times were outside this run.
+
+## Reproduce
+
+Run `python -m unittest discover -s tests -v` from the repository root. Each release executable accepts `--self-test` to check offline spelling, an old-profile upgrade, a local credential round trip, correction selection and draft retention against temporary files. The [Windows guide](WINDOWS.md) includes the native acceptance checklist.

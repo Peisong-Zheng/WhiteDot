@@ -1,5 +1,8 @@
 import io
 import json
+import os
+import stat
+from dataclasses import asdict
 import ssl
 import tempfile
 import unittest
@@ -8,7 +11,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
 from whitedot.provider import MAX_TEXT, PRESETS, Provider, ProviderConfig, ProviderError
-from whitedot.settings import Settings, StorageError
+from whitedot.settings import Settings, StorageError, _account
 
 
 TOKEN = "unit-test-placeholder"
@@ -147,83 +150,104 @@ class SettingsTests(unittest.TestCase):
         root = self.enterContext(tempfile.TemporaryDirectory())
         self.path = Path(root) / "WhiteDot" / "settings.json"
         self.settings = Settings(self.path)
-        self.secrets = {}
-        self.vault = Mock()
-        self.vault.get_password.side_effect = lambda service, user: self.secrets.get(user)
-        self.vault.set_password.side_effect = lambda service, user, value: self.secrets.update({user: value})
-        self.vault.delete_password.side_effect = lambda service, user: self.secrets.pop(user)
-        self.backend = self.enterContext(patch("whitedot.settings._vault", return_value=self.vault))
+        self.connections = self.path.with_name("connections.json")
 
-    def test_first_run_and_roundtrip_without_plaintext(self):
+    def test_local_key_round_trips_and_is_endpoint_scoped(self):
         self.assertEqual(self.settings.config, PRESETS["DeepSeek"])
         self.assertEqual(self.settings.get_key(), "")
-        self.backend.assert_not_called()
+        self.assertFalse(self.connections.exists())
         self.settings.set("position", [21, 42])
         self.settings.save_provider(PRESETS["OpenAI"], TOKEN)
         restored = Settings(self.path)
+        self.assertTrue(restored.has_key())
         self.assertEqual(restored.get_key(), TOKEN)
         self.assertEqual(restored.config, PRESETS["OpenAI"])
         self.assertEqual(restored.get("position"), [21, 42])
         self.assertNotIn(TOKEN, self.path.read_text())
+        self.assertEqual(json.loads(self.connections.read_text())["keys"][_account(restored.config)], TOKEN)
         different_endpoint = ProviderConfig("OpenAI", "https://other.example/v1", "model")
         self.assertEqual(restored.get_key(different_endpoint), "")
-
-    def test_switch_providers_recovers_custom_endpoint_model_and_key_after_upgrade(self):
-        custom = ProviderConfig("Custom", "https://model.example/v1", "my-editor")
-        self.settings.save_provider(custom, TOKEN)
-        legacy = json.loads(self.path.read_text())
-        del legacy["profiles"]
-        self.path.write_text(json.dumps(legacy))
-        upgraded = Settings(self.path)
-        upgraded.save_provider(PRESETS["OpenAI"], "second-key")
-        restored = Settings(self.path)
+        self.assertFalse(restored.has_key(different_endpoint))
+        with self.assertRaises(StorageError):
+            restored.save_provider(different_endpoint)
         self.assertEqual(restored.config, PRESETS["OpenAI"])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file mode")
+    def test_owner_only_permissions_on_every_replace(self):
+        self.settings.save_provider(PRESETS["OpenAI"], TOKEN)
+        self.assertEqual(stat.S_IMODE(self.connections.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.connections.parent.stat().st_mode), 0o700)
+        self.connections.chmod(0o644)
+        self.settings.save_provider(PRESETS["OpenAI"], "replacement")
+        self.assertEqual(stat.S_IMODE(self.connections.stat().st_mode), 0o600)
+        self.assertNotIn(TOKEN, self.connections.read_text())
+        self.assertEqual(list(self.connections.parent.iterdir()), [self.connections])
+
+    def test_legacy_reentry_preserves_endpoint_model_and_other_profiles(self):
+        custom = ProviderConfig("Custom", "https://model.example/v1", "my-editor")
+        other = PRESETS["OpenAI"]
+        old = {"provider": asdict(custom), "profiles": {"OpenAI": asdict(other)},
+               "accounts": [_account(custom), _account(other)], "position": [42, 12],
+               "credential_generations": {_account(custom): "0" * 32}}
+        self.path.parent.mkdir()
+        self.path.write_text(json.dumps(old))
+        upgraded = Settings(self.path)
+        self.assertEqual(upgraded.config, custom)
+        self.assertTrue(upgraded.needs_key_reentry())
+        self.assertFalse(upgraded.has_key())
+        self.assertEqual(upgraded.get_key(), "")
+        self.assertFalse(self.connections.exists())
+        self.assertEqual(upgraded.get("position"), old["position"])
+        upgraded.save_provider(custom, TOKEN)
+        self.assertFalse(upgraded.needs_key_reentry())
+        self.assertTrue(upgraded.needs_key_reentry(other))
+        upgraded.save_provider(other, "second-key")
+        restored = Settings(self.path)
+        self.assertEqual(restored.config, other)
         self.assertEqual(restored.config_for("Custom"), custom)
-        self.assertEqual(restored.get_key(restored.config_for("Custom")), TOKEN)
-        self.assertNotIn(TOKEN, self.path.read_text())
-        self.assertNotIn("second-key", self.path.read_text())
+        self.assertEqual(restored.get_key(custom), TOKEN)
+        self.assertEqual(restored.get_key(other), "second-key")
+        self.assertFalse(restored.needs_key_reentry(custom))
+        self.assertEqual(json.loads(self.path.read_text()), old)
 
-    def test_incomplete_account_index_can_be_repaired_by_validating_a_key(self):
-        self.settings.set("accounts", None)
-        self.assertEqual(self.settings.get_key(), "")
+    def test_rotation_and_model_change_reuse_only_the_same_endpoint(self):
+        self.settings.save_provider(PRESETS["DeepSeek"], "previous")
         self.settings.save_provider(PRESETS["DeepSeek"], TOKEN)
-        self.assertEqual(self.settings.get_key(), TOKEN)
+        updated = ProviderConfig("DeepSeek", PRESETS["DeepSeek"].base_url, "my-model")
+        self.settings.save_provider(updated)
+        self.assertNotIn("previous", self.connections.read_text())
+        restored = Settings(self.path)
+        self.assertEqual(restored.config, updated)
+        self.assertEqual(restored.get_key(), TOKEN)
+        self.assertEqual(len(json.loads(self.connections.read_text())["keys"]), 1)
 
-    def test_failed_vault_save_preserves_preferences(self):
-        self.vault.set_password.side_effect = RuntimeError(TOKEN)
-        with self.assertRaises(StorageError) as failure:
-            self.settings.save_provider(PRESETS["OpenAI"], TOKEN)
-        self.assertNotIn(TOKEN, str(failure.exception))
-        self.assertFalse(self.path.exists())
-        self.assertEqual(self.settings.config, PRESETS["DeepSeek"])
-
-    def test_failed_config_write_restores_key(self):
+    def test_failed_replacement_preserves_all_state_and_removes_temporary_file(self):
         self.settings.save_provider(PRESETS["OpenAI"], "previous")
-        with patch.object(self.settings, "_write", side_effect=StorageError("test")):
-            with self.assertRaises(StorageError):
+        original = self.connections.read_bytes()
+        with patch.object(Path, "replace", side_effect=OSError(TOKEN)):
+            with self.assertRaises(StorageError) as failure:
                 self.settings.save_provider(PRESETS["OpenAI"], TOKEN)
-        self.assertEqual(self.settings.get_key(), "previous")
-
-    def test_replace_without_reading_old_key_and_preserve_legacy_item_on_failed_save(self):
-        import hashlib
-        config = PRESETS["DeepSeek"]
-        old_account = hashlib.sha256((config.provider + "\n" + config.base_url.rstrip("/")).encode()).hexdigest()
-        self.secrets[old_account] = "old-key"
-        self.settings.set("accounts", [old_account])
-        self.assertTrue(self.settings.has_key(config))
-        with patch.object(self.settings, "_write", side_effect=StorageError("disk is full")):
             with self.assertRaises(StorageError):
-                self.settings.save_provider(config, "replacement")
-        self.assertEqual(self.secrets, {old_account: "old-key"})
-        self.settings.save_provider(config, "replacement")
-        self.vault.get_password.assert_not_called()
-        self.assertEqual(self.settings.get_key(config), "replacement")
-        self.vault.get_password.assert_not_called()
-        self.assertNotIn(old_account, self.secrets)
-        restarted = Settings(self.path)
-        self.assertEqual(restarted.get_key(config), "replacement")
-        self.assertEqual(restarted.get_key(config), "replacement")
-        self.vault.get_password.assert_called_once()
+                self.settings.save_provider(PRESETS["DeepSeek"], TOKEN)
+        self.assertNotIn(TOKEN, str(failure.exception))
+        self.assertEqual(self.settings.config, PRESETS["OpenAI"])
+        self.assertEqual(self.settings.get_key(), "previous")
+        self.assertEqual(self.connections.read_bytes(), original)
+        self.assertEqual(list(self.connections.parent.iterdir()), [self.connections])
+
+    def test_corrupt_connection_file_keeps_offline_use_and_preserves_file(self):
+        self.path.parent.mkdir()
+        self.connections.write_text("invalid")
+        broken = Settings(self.path)
+        self.assertFalse(broken.has_key())
+        self.assertTrue(broken.connection_error)
+        with self.assertRaises(StorageError):
+            broken.save_provider(PRESETS["OpenAI"], TOKEN)
+        self.assertEqual(self.connections.read_text(), "invalid")
+        self.connections.unlink()
+        broken.save_provider(PRESETS["OpenAI"], TOKEN)
+        self.assertFalse(broken.connection_error)
+        self.assertEqual(broken.get_key(), TOKEN)
 
     def test_invalid_pref_file(self):
         self.path.parent.mkdir()

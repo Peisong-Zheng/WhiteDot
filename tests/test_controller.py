@@ -93,8 +93,9 @@ class ControllerTests(unittest.TestCase):
         self.expire_debounce()
         self.jobs.finish()
         selections = p.editor.extraSelections()
-        self.assertEqual(selections[0].cursor.selectedText(), "teh")
-        p.editor.issue_click.emit(c.issues[0], QPoint(80, 100))
+        self.assertIn("teh", [s.cursor.selectedText() for s in selections])
+        typo = next(issue for issue in c.issues if issue.original == "teh")
+        p.editor.issue_click.emit(typo, QPoint(80, 100))
         c.bubble.chosen.emit("the")
         self.assertEqual(p.editor.toPlainText(), "😀 She go to the library.")
         p.rewrite.click()
@@ -147,7 +148,8 @@ class ControllerTests(unittest.TestCase):
         self.jobs.finish()
         self.assertTrue(p.result_group.isHidden())
         self.assertEqual(p.result.toPlainText(), "")
-        self.assertFalse(c.issues)
+        self.assertEqual([i.original for i in c.issues], ["teh"])
+        self.assertEqual(c.grammar_issues, [])
         c.dot.clicked.emit()
         self.expire_debounce()
         self.jobs.finish()
@@ -209,7 +211,8 @@ class ControllerTests(unittest.TestCase):
             self.expire_debounce()
         self.assertEqual(len(self.jobs.pending), 1)
         self.jobs.finish()
-        self.assertEqual(c.issues, [])
+        self.assertEqual([i.original for i in c.issues], ["teh"])
+        self.assertEqual(c.grammar_issues, [])
         self.jobs.finish()
         self.assertEqual(self.model.checks, ["Final teh draft."])
         self.assertEqual(len(c.issues), 1)
@@ -352,10 +355,8 @@ class ControllerTests(unittest.TestCase):
     def test_saved_custom_profile_reappears_when_switching_providers(self):
         from whitedot.provider import ProviderConfig
         custom = ProviderConfig("Custom", "https://custom.example/v1", "writing-model")
-        with patch("whitedot.settings._vault"):
-            self.prefs.save_provider(custom, "fixture-key")
-        with patch.object(self.prefs, "get_key", side_effect=AssertionError("unexpected vault access")), \
-                patch("whitedot.settings._vault", side_effect=AssertionError("unexpected vault access")):
+        self.prefs.save_provider(custom, "fixture-key")
+        with patch.object(self.prefs, "get_key", side_effect=AssertionError("unexpected key read")):
             self.ctrl.configure()
             dialog = self.ctrl.dialog
             self.assertEqual(dialog.key.text(), "")
@@ -377,10 +378,9 @@ class ControllerTests(unittest.TestCase):
 
     def test_edit_model_reuses_key_only_on_deliberate_save(self):
         from whitedot.provider import PRESETS
-        with patch("whitedot.settings._vault"):
-            self.prefs.save_provider(PRESETS["DeepSeek"], "fixture-key")
+        self.prefs.save_provider(PRESETS["DeepSeek"], "fixture-key")
         with patch.object(self.prefs, "get_key", return_value="fixture-key") as read, \
-                patch("whitedot.settings._vault") as vault, patch("whitedot.app.Provider") as provider:
+                patch("whitedot.app.Provider") as provider:
             self.ctrl.configure()
             dialog = self.ctrl.dialog
             dialog.model.setText("other-model")
@@ -390,15 +390,13 @@ class ControllerTests(unittest.TestCase):
             self.jobs.finish()
             read.assert_called_once()
             provider.return_value.validate.assert_called_once()
-            vault.assert_not_called()
             self.assertEqual(self.prefs.config.model, "other-model")
 
-    def test_only_real_request_loads_key_and_denial_needs_explicit_retry(self):
+    def test_only_real_request_uses_local_key_and_failure_needs_explicit_retry(self):
         from whitedot.provider import PRESETS
-        with patch("whitedot.settings._vault"):
-            self.prefs.save_provider(PRESETS["DeepSeek"], "fixture-key")
+        self.prefs.save_provider(PRESETS["DeepSeek"], "fixture-key")
         c, p = self.ctrl, self.panel
-        # Simulate a new process with a protected item left by an older release.
+        # Simulate a new process with a saved local connection.
         c.prefs = Settings(self.prefs._path)
         c.client = SavedProvider(c.prefs)
         with patch.object(c.prefs, "get_key", side_effect=[StorageError("Access denied."), "fixture-key"]) as read, \
@@ -430,7 +428,7 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(read.call_count, 2)
             self.assertEqual(p.result.toPlainText(), "Retry the draft.")
 
-    def test_draft_hidden_during_credential_authorization_is_never_sent(self):
+    def test_draft_hidden_while_loading_a_profile_is_never_sent(self):
         c, p = self.ctrl, self.panel
         c.client = SavedProvider(self.prefs)
         c.show_editor()
@@ -446,3 +444,75 @@ class ControllerTests(unittest.TestCase):
             self.jobs.finish()
         self.assertFalse(p.isVisible())
         self.assertEqual(self.model.checks, [])
+
+
+    def test_offline_typing_marks_finished_words_and_paste_immediately(self):
+        c, p = self.ctrl, self.panel
+        c.client = None
+        c.show_editor()
+        QTest.keyClicks(p.editor, "teh")
+        self.assertTrue(c.word_delay.isActive())
+        self.assertFalse(c.issues)
+        QTest.keyClicks(p.editor, " ")
+        self.assertEqual([s.cursor.selectedText() for s in p.editor.extraSelections()], ["teh"])
+        self.assertIsNone(c.check_inflight)
+        QTest.keyClicks(p.editor, "cat")
+        self.assertEqual([s.cursor.selectedText() for s in p.editor.extraSelections()], ["teh"])
+        self.assertFalse(c.delay.isActive())
+        p.editor.setPlainText("I can recieve teh letter")
+        self.assertEqual([i.original for i in c.issues], ["recieve", "teh"])
+        self.assertEqual(self.jobs.pending, [])
+
+    def test_legacy_profile_has_offline_corrections_and_one_time_setup(self):
+        from whitedot.settings import _account
+        c, p = self.ctrl, self.panel
+        self.prefs.set("accounts", [_account(self.prefs.config)])
+        c.client = None
+        c.show_editor()
+        self.assertEqual(p.context_action.text(), "Re-enter API key")
+        p.editor.setPlainText("Fix teh draft.")
+        self.assertEqual([i.original for i in c.issues], ["teh"])
+        self.assertFalse(c.delay.isActive())
+        self.assertFalse(p.rewrite.isEnabled())
+        p.context_action.click()
+        self.assertTrue(c.dialog.key.isVisible())
+        self.assertFalse(c.dialog.key.text())
+
+    def test_inflight_grammar_is_reused_only_for_whole_unchanged_sentences(self):
+        c, p = self.ctrl, self.panel
+        c.show_editor()
+        first = "The agency plan ahead."
+        p.editor.setPlainText(first)
+        self.assertTrue(c.sentence_delay.isActive())
+        p.editor.moveCursor(p.editor.textCursor().MoveOperation.End)
+        p.editor.insertPlainText(" More")
+        self.assertTrue(c.sentence_delay.isActive())
+        c.sentence_delay.timeout.emit()
+        work, complete = self.jobs.pending.pop()
+        work()
+        p.editor.insertPlainText(" sentences with teh typo.")
+        correct = Issue(11, 15, "plan", ("plans",), "Use a singular verb.")
+        complete([correct], "")
+        self.assertEqual([i.original for i in c.issues], ["plan", "teh"])
+        p.editor.moveCursor(p.editor.textCursor().MoveOperation.Start)
+        p.editor.insertPlainText("Intro. ")
+        self.assertEqual(c.issues[0].start, 18)
+        p.editor.setPlainText("The agencies plan ahead. More sentences with teh typo.")
+        self.assertEqual([i.original for i in c.issues], ["teh"])
+
+    def test_late_remote_result_cannot_undo_offline_fix_or_duplicate_marks(self):
+        c, p = self.ctrl, self.panel
+        c.show_editor()
+        p.editor.setPlainText("Check teh draft.")
+        self.expire_debounce()
+        _, complete = self.jobs.pending.pop()
+        typo = c.issues[0]
+        c.apply(typo, "the", c.version)
+        complete([typo], "")
+        self.assertEqual(p.editor.toPlainText(), "Check the draft.")
+        self.assertEqual(c.issues, [])
+        p.editor.setPlainText("Check teh draft.")
+        self.expire_debounce()
+        self.jobs.finish()
+        self.assertEqual(len(c.issues), 1)
+        self.assertEqual(len(p.editor.extraSelections()), 1)

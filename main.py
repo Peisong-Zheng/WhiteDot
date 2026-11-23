@@ -12,48 +12,53 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from whitedot import __version__, startup
 from whitedot.app import Controller
 from whitedot.settings import Settings, StorageError
-from whitedot.types import Issue
 
 
 def smoke(app):
     """Exercise the packaged manual editor with a fixture and no network requests."""
-    from whitedot.provider import PRESETS, Provider
-    from whitedot.settings import _account, _vault
-    _vault()  # Verify that the bundled system keyring imports without reading a credential.
-    Provider(PRESETS["DeepSeek"], "offline-placeholder")
-
-    class OfflineSettings(Settings):
-        def get_key(self, config=None):
-            raise AssertionError("Browsing settings must not read a saved credential")
+    from whitedot.settings import _account
 
     with tempfile.TemporaryDirectory() as tmp:
-        prefs = OfflineSettings(Path(tmp) / "prefs.json")
-        prefs.set("accounts", [_account(prefs.config)])  # Old-format configured profile.
+        path = Path(tmp) / "settings.json"
+        prefs = Settings(path)
+        prefs.set("accounts", [_account(prefs.config)])
+        assert prefs.needs_key_reentry() and not prefs.has_key()
         ctrl = Controller(app, prefs, testing=True)
-        ctrl.dot.clicked.emit()
+        ctrl.open_dot()
         panel = ctrl.panel
         assert panel.isVisible() and not panel.original_copy.isEnabled()
+
+        # Use the editor's real local checker before any provider exists.
+        panel.editor.setPlainText("😀 teh ")
+        deadline = time.monotonic() + 2
+        while not ctrl.issues and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.005)
+        issue = next(i for i in ctrl.issues if i.original == "teh" and "the" in i.suggestions)
+        assert any(s.cursor.selectedText() == "teh" for s in panel.editor.extraSelections())
+        ctrl.apply(issue, "the", ctrl.version)
+        assert panel.editor.toPlainText() == "😀 the " and panel.original_copy.isEnabled()
+
+        ctrl.configure()
+        assert ctrl.dialog.key.isVisible() and not ctrl.dialog.key.text()
+        ctrl.dialog.reject()
+        ctrl.close_panel()
+        ctrl.open_dot()
+        assert panel.editor.toPlainText() == "😀 the "
+        ctrl.close_panel()
+        ctrl.dot.hide()
+
+        prefs.save_provider(prefs.config, "offline-fixture")
+        restored = Settings(path)
+        assert restored.has_key() and restored.get_key() == "offline-fixture"
+        assert not restored.needs_key_reentry()
+        ctrl = Controller(app, restored, testing=True)
         ctrl.configure()
         dialog = ctrl.dialog
         assert dialog.saved_key.isVisible() and dialog.key.isHidden() and not dialog.key.text()
         dialog.change_key.click()
         assert dialog.key.isVisible() and not dialog.key.text()
         dialog.reject()
-        assert panel.isVisible()
-        panel.editor.setPlainText("😀 teh")
-        issue = Issue(2, 5, "teh", ("the",), "Spelling")
-        ctrl.issues = [issue]
-        panel.editor.mark(ctrl.issues)
-        selections = panel.editor.extraSelections()
-        assert selections[0].cursor.selectedText() == issue.original
-        ctrl.apply(issue, "the", ctrl.version)
-        assert panel.editor.toPlainText() == "😀 the"
-        assert panel.original_copy.isEnabled()
-        ctrl.dot.clicked.emit()
-        assert not panel.isVisible()
-        ctrl.dot.clicked.emit()
-        assert panel.editor.toPlainText() == "😀 the"
-        ctrl.close_panel()
         ctrl.dot.hide()
         app.processEvents()
     return 0
@@ -105,7 +110,9 @@ def main():
     except OSError:
         QMessageBox.critical(None, "Folio", "Folio cannot open its settings folder. Check your account permissions.")
         return 1
-    name = "Folio-" + hashlib.sha256(str(runtime).encode()).hexdigest()[:16]
+    # An older running version holds the same lock but must not open its editor
+    # in response to someone double-clicking the newly downloaded application.
+    name = f"Folio-{__version__}-" + hashlib.sha256(str(runtime).encode()).hexdigest()[:16]
     lock = QLockFile(str(runtime / "instance.lock"))
     if not lock.tryLock(0):
         if lock.error() != QLockFile.LockFailedError:
@@ -113,8 +120,8 @@ def main():
             return 1
         if not activate_existing(name):
             QMessageBox.information(None, "An editor is already running",
-                                    "If WhiteDot is open, quit it from its menu and open Folio again. "
-                                    "If Folio is already open, click its floating dot to resume writing.")
+                                    f"To start Folio {__version__}, copy any draft you want to keep, "
+                                    "quit the running editor from the dot’s menu, then open Folio again.")
         return 0
     try:
         prefs = Settings()

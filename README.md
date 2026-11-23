@@ -1,6 +1,6 @@
 # Folio
 
-Folio is a floating English proofreading editor for macOS and Windows. Click the white dot, type or paste a draft, and pause to check its spelling and grammar. Click an underlined word to choose a correction. You can also rewrite the whole draft and copy the result.
+Folio is a floating English proofreading editor for macOS and Windows. Click the white dot and start typing. Common spelling mistakes are underlined locally as you finish each word, even offline. Connect an AI provider for sentence-level proofreading and rewrites. Click an underlined word to choose a correction. You can also rewrite the whole draft and copy the result.
 
 ![Folio showing a draft, an inline correction and the rewritten text](docs/editor.png)
 
@@ -13,14 +13,16 @@ Folio is a floating English proofreading editor for macOS and Windows. Click the
 
 The Windows portable executable is also included in this checkout. [Windows EXE](dist/Folio-windows-x64.exe) · [GitHub releases](https://github.com/Peisong-Zheng/WhiteDot/releases)
 
-**Upgrading from WhiteDot:** copy your draft, quit WhiteDot from its menu, and open Folio. Folio reuses your existing provider, saved credential and dot position. If you enabled login startup, place the new app alongside the old one so Folio can update the login item. If you choose another location, enable **Open at login** there. If you previously installed the optional 0.1 browser extension, you can remove it in your browser's extension settings.
+**Upgrading from Folio 0.4 or WhiteDot?** Copy your draft, quit the old app from its menu and open the new version. Your provider, model and dot position carry over. Open **AI settings** from the dot or tray menu and re-enter the API key once for each provider you use. Folio leaves existing Keychain and Credential Manager entries untouched.
+
+If you enabled login startup in WhiteDot, install Folio in the same folder so it can update the login item. If you choose another location, enable **Open at login** there.
 
 ## Check your first draft
 
-1. Click the floating dot and choose **Connect AI** for first-time setup. To change the provider or replace a saved key later, right-click the dot or use the menu bar or tray icon and choose **AI settings**.
-2. Choose a provider and model, enter your API key, and choose **Verify and save**. Folio checks the connection using a fixed English sample before saving the configuration.
-3. Try `I saw teh cat.` After a brief pause, Folio checks the draft. Click the red underline and choose `the`.
-4. Select **Rewrite** to correct the entire draft. The revision opens below the draft, with new or changed words highlighted. Each section has its own **Copy** button.
+1. Click the floating dot. Type `I saw teh cat.` The local checker underlines `teh` as you reach the following space. Click it and choose `the`. This works before you connect a provider.
+2. To enable sentence checks and rewrites, open **AI settings** from the dot's right-click menu or from the menu bar or tray icon. Enter a provider, model and key, then choose **Verify and save**. Folio uses a fixed English sample for validation.
+3. Keep writing while the AI checks the draft. Click a marked word or press F7 to see suggestions.
+4. Select **Rewrite** to see the revised draft below the original, with new or changed words highlighted. Each section has its own **Copy** button.
 
 | Action | How |
 | --- | --- |
@@ -33,15 +35,16 @@ The Windows portable executable is also included in this checkout. [Windows EXE]
 
 ## Providers and privacy
 
-Folio sends the English draft you enter in **its own editor** to your selected provider for proofreading. A mixed-language draft is submitted in full. The limit is 24,000 characters per request. Closing the editor cancels checks still waiting to start. If you edit while a request is in flight, Folio discards the old response. Provider fees apply. Folio offers to copy an unsaved draft or revision when you quit.
+Local spelling runs on your device. Once you configure a provider, Folio also sends the draft in its own editor to that provider for proofreading. Mixed-language drafts are submitted in full. The limit is 24,000 characters per request. After further edits, Folio keeps applicable suggestions for unchanged sentences and discards outdated ones. Provider fees apply. Closing the editor cancels a check still waiting to start.
 
 DeepSeek requests explicitly disable thinking for connection tests, proofreading and rewriting. OpenAI and Gemini have presets, and compatible Chat Completions endpoints can use the custom setting. The selected model must return the requested JSON structure. Rewrites aim to preserve meaning and tone, and Folio verifies the line structure before displaying the result. [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/)
 
-Saved keys stay in macOS Keychain or Windows Credential Manager. Opening the editor or browsing AI settings uses public preferences. A saved key is never filled into a text field. Choose **Change key** in AI settings to enter a replacement. Folio validates a replacement before saving it.
+Validated keys are saved in **plain text** in your local user profile. Folio uses this file for connections, including after a restart. Anyone who can read the file can use its keys. The settings dialog displays the saved status and offers **Change key**. It never displays a stored key.
 
-When Folio first needs an existing key for proofreading or rewriting, macOS may ask you to authorize the updated app. After a successful read, Folio reuses the key for that session. [Apple's guide to keychain access after an app update](https://support.apple.com/guide/keychain-access/if-a-trusted-app-asks-for-keychain-access-kyca1331/mac)
-
-Preferences keep their original location for upgrades. They live in `~/Library/Application Support/WhiteDot/settings.json` on macOS and `%APPDATA%\WhiteDot\settings.json` on Windows.
+| Platform | Connection file | Dot position and earlier preferences |
+| --- | --- | --- |
+| macOS | `~/Library/Application Support/WhiteDot/connections.json` (owner read/write, mode 0600) | `~/Library/Application Support/WhiteDot/settings.json` |
+| Windows | `%LOCALAPPDATA%\Folio\connections.json` (inherits local user profile permissions) | `%APPDATA%\WhiteDot\settings.json` |
 
 ## Run from source
 
@@ -66,6 +69,8 @@ The packaged self-test runs locally without a provider account. For an optional 
 
 ## Maintain and release
 
-The shared editor and launcher are in `whitedot/windows_ui.py`. The controller in `whitedot/app.py` owns draft revisions, provider requests and menus. Provider protocols and credential storage are in `whitedot/provider.py` and `whitedot/settings.py`. The Spectral typeface ships with the app. [Font source](https://github.com/google/fonts/tree/main/ofl/spectral) · [Font license](whitedot/assets/OFL.txt)
+The shared editor and launcher are in `whitedot/windows_ui.py`. The controller in `whitedot/app.py` owns draft revisions, provider requests and menus. Provider protocols and credential storage are in `whitedot/provider.py` and `whitedot/settings.py`. The offline checker uses the bundled typos project dictionary. [Spelling data and license](whitedot/assets/TYPOS-LICENSE.txt)
 
-After syncing the source in VS Code, open **Actions → Build desktop releases → Run workflow** on GitHub. Leave the release tag blank to try the build. To publish, use a new tag such as `v0.4.0`. The workflow builds on separate macOS and Windows runners and uploads both desktop binaries with SHA-256 checksums after the builds pass. [Verification record](docs/VERIFICATION.md)
+The Spectral typeface ships with the app. [Font source](https://github.com/google/fonts/tree/main/ofl/spectral) · [Font license](whitedot/assets/OFL.txt)
+
+After syncing the source in VS Code, open **Actions → Build desktop releases → Run workflow** on GitHub. Leave the release tag blank to try the build. To publish, use a new tag such as `v0.5.0`. The workflow builds on separate macOS and Windows runners and uploads both desktop binaries with SHA-256 checksums after the builds pass. [Verification record](docs/VERIFICATION.md)
