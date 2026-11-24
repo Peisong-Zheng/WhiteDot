@@ -669,15 +669,8 @@ class Controller(QObject):
         text, problem = self.draft, self.input_problem
         can_rewrite = self.client and text and not problem and not self.rewriting and not self.access_error()
         self.panel.rewrite.setEnabled(bool(can_rewrite))
-        if not self.client:
-            count = len(self.issues)
-            offline = f"{count} suggestion" + ("s" if count != 1 else "") if count else ""
-            legacy = self.prefs.needs_key_reentry()
-            if legacy and not offline:
-                offline = "Re-enter your key once for AI grammar and rewrites."
-            self.set_status(problem or offline, "Re-enter API key" if legacy else "Connect AI", self.configure)
-        elif not text:
-            self.set_status("Checks as you type")
+        if not text:
+            self.set_status("Checks as you type" if self.client else "")
         elif problem:
             self.set_status(problem)
         elif self.access_error():
@@ -691,6 +684,8 @@ class Controller(QObject):
         elif self.issues:
             count = len(self.issues)
             self.set_status("", f"{count} suggestion" + ("s" if count != 1 else ""), self.review_issue)
+        elif not self.client:
+            self.set_status("")
         elif self.panel.result.toPlainText():
             self.set_status("No changes needed" if self.panel.result.toPlainText() == text else "Rewrite ready")
         elif self.checked:

@@ -45,12 +45,11 @@ class EditorTests(unittest.TestCase):
 
     def test_first_draft_has_only_the_writing_controls(self):
         panel = self.panel
-        panel.set_context_action("Connect AI")
         labels = {item.text() for item in panel.findChildren(QLabel) if item.isVisible()}
         self.assertEqual(labels, {"Draft"})
         buttons = {item.accessibleName() or item.text()
                    for item in panel.findChildren(QPushButton) if item.isVisible()}
-        self.assertEqual(buttons, {"Hide editor (Esc)", "Connect AI", "Copy draft", "Rewrite"})
+        self.assertEqual(buttons, {"Hide editor (Esc)", "Copy draft", "Rewrite"})
         self.assertFalse(panel.original_copy.isEnabled())
         self.assertFalse(panel.rewrite.isEnabled())
 

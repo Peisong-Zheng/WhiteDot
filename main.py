@@ -27,6 +27,7 @@ def smoke(app):
         ctrl.open_dot()
         panel = ctrl.panel
         assert panel.isVisible() and not panel.original_copy.isEnabled()
+        assert panel.context_action.isHidden() and panel.status.isHidden()
 
         # Use the editor's real local checker before any provider exists.
         panel.editor.setPlainText("😀 teh ")
@@ -39,7 +40,7 @@ def smoke(app):
         ctrl.apply(issue, "the", ctrl.version)
         assert panel.editor.toPlainText() == "😀 the " and panel.original_copy.isEnabled()
 
-        ctrl.configure()
+        next(a for a in ctrl.menu.actions() if a.text() == "AI settings…").trigger()
         assert ctrl.dialog.key.isVisible() and not ctrl.dialog.key.text()
         ctrl.dialog.reject()
         ctrl.close_panel()

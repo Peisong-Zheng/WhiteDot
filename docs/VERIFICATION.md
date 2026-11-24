@@ -1,4 +1,10 @@
-# Folio 0.5.0 verification
+# Folio verification
+
+## 0.5.1 editor controls
+
+On 24 November 2026, the controller and editor tests checked first-use and upgraded profiles. An empty or correctly spelled offline draft leaves the left side of the toolbar clear. A typo shows a suggestion count that opens the correction. A separate native Cocoa interaction test clicked a suggestion, applied the correction, right-clicked the dot and opened AI settings. Dismissing settings restored the draft. All 59 macOS regression tests passed. Windows CPython under Wine passed 58 and skipped the POSIX permission check. Both 0.5.1 release executables passed the packaged self-test.
+
+## 0.5.0 baseline
 
 Tested on 23 November 2026 with synthetic drafts, a temporary local connection file and a loopback HTTP provider.
 

@@ -73,4 +73,4 @@ The shared editor and launcher are in `whitedot/windows_ui.py`. The controller i
 
 The Spectral typeface ships with the app. [Font source](https://github.com/google/fonts/tree/main/ofl/spectral) · [Font license](whitedot/assets/OFL.txt)
 
-After syncing the source in VS Code, open **Actions → Build desktop releases → Run workflow** on GitHub. Leave the release tag blank to try the build. To publish, use a new tag such as `v0.5.0`. The workflow builds on separate macOS and Windows runners and uploads both desktop binaries with SHA-256 checksums after the builds pass. [Verification record](docs/VERIFICATION.md)
+After syncing the source in VS Code, open **Actions → Build desktop releases → Run workflow** on GitHub. Leave the release tag blank to try the build. To publish, use a new tag such as `v0.5.1`. The workflow builds on separate macOS and Windows runners and uploads both desktop binaries with SHA-256 checksums after the builds pass. [Verification record](docs/VERIFICATION.md)

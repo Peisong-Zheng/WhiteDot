@@ -234,11 +234,17 @@ class ControllerTests(unittest.TestCase):
         c, p = self.ctrl, self.panel
         c.client = None
         c.show_editor()
+        self.assertTrue(p.context_action.isHidden())
+        self.assertTrue(p.status.isHidden())
         p.editor.setPlainText("A teh draft.")
         self.assertFalse(c.delay.isActive())
         self.assertFalse(p.rewrite.isEnabled())
-        self.assertEqual(p.context_action.text(), "Connect AI")
+        self.assertEqual(p.context_action.text(), "1 suggestion")
         p.context_action.click()
+        self.assertTrue(c.bubble.isVisible())
+        self.assertIsNone(c.dialog)
+        c.hide_bubble()
+        next(a for a in c.menu.actions() if a.text() == "AI settings…").trigger()
         self.assertTrue(c.dialog.isVisible())
         self.assertFalse(c.dialog.save.isEnabled())
         self.assertTrue(c.dialog.save.isDefault())
@@ -463,18 +469,24 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual([i.original for i in c.issues], ["recieve", "teh"])
         self.assertEqual(self.jobs.pending, [])
 
-    def test_legacy_profile_has_offline_corrections_and_one_time_setup(self):
+    def test_legacy_profile_keeps_key_setup_in_the_menu(self):
         from whitedot.settings import _account
         c, p = self.ctrl, self.panel
         self.prefs.set("accounts", [_account(self.prefs.config)])
         c.client = None
         c.show_editor()
-        self.assertEqual(p.context_action.text(), "Re-enter API key")
+        self.assertTrue(p.context_action.isHidden())
+        self.assertTrue(p.status.isHidden())
         p.editor.setPlainText("Fix teh draft.")
         self.assertEqual([i.original for i in c.issues], ["teh"])
         self.assertFalse(c.delay.isActive())
         self.assertFalse(p.rewrite.isEnabled())
-        p.context_action.click()
+        self.assertEqual(p.context_action.text(), "1 suggestion")
+        self.assertTrue(p.status.isHidden())
+        p.editor.setPlainText("Fix the draft.")
+        self.assertTrue(p.context_action.isHidden())
+        self.assertTrue(p.status.isHidden())
+        next(a for a in c.menu.actions() if a.text() == "AI settings…").trigger()
         self.assertTrue(c.dialog.key.isVisible())
         self.assertFalse(c.dialog.key.text())
 

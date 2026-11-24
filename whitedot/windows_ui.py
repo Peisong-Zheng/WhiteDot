@@ -409,6 +409,7 @@ class Panel(Paper):
         self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.status.setAccessibleName("Proofreading status")
         self.actions.addWidget(self.status, 1, 0)
+        self.status.hide()
         self.original_copy = copy_button(self.editor, "Copy draft")
         self.actions.addWidget(self.original_copy, 1, 1)
         self.rewrite = button("Rewrite")
@@ -467,7 +468,7 @@ class Panel(Paper):
             self.actions.addWidget(self.status, 0, 0, 1, 3)
         else:
             self.actions.addWidget(self.status, 1, 0)
-        self.status.setVisible(bool(self.status.text()) or not text)
+        self.status.setVisible(bool(self.status.text()))
 
     def count_words(self):
         total = len(WORDS.findall(self.editor.toPlainText()))

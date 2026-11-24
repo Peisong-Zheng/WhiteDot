@@ -40,7 +40,7 @@ Find the output at `dist\Folio-windows-x64.exe`. You can use **Properties → De
 
 | Scenario | What to verify |
 | --- | --- |
-| First launch | Open the dot. Confirm the editor accepts input right away and gives a clear route to setting up your provider. |
+| First launch | Open the dot and type a draft. Check that local corrections work with an empty provider profile. Right-click the dot and choose **AI settings** to enter a key. |
 | Suggestions | Type `I saw teh cat.` and choose `the` from the highlighted word. Repeat using F7 and Enter. Also try a repeated typo and a typo after an emoji. |
 | Revisions | Edit before a check or rewrite finishes. Suggestions may carry over for unchanged sentences. Any correction for an edited sentence must be dropped and rechecked. |
 | Draft and result | Rewrite with Ctrl+Enter. Copy each section into a scratch document and compare it with the text you saw. Collapse and reopen the editor to resume your draft. |
@@ -55,4 +55,4 @@ For a Windows coding agent:
 
 1. Sync the source to your GitHub repository from VS Code.
 2. Open **Actions → Build desktop releases → Run workflow** and choose the synced branch. Leave the release tag empty for downloadable test artifacts.
-3. To publish, specify an unused version tag such as `v0.5.0`. The workflow publishes the macOS ZIP, portable Windows EXE and SHA-256 checksums together after both builds pass. Pushing a version tag also triggers the workflow.
+3. To publish, specify an unused version tag such as `v0.5.1`. The workflow publishes the macOS ZIP, portable Windows EXE and SHA-256 checksums together after both builds pass. Pushing a version tag also triggers the workflow.
